@@ -1,0 +1,30 @@
+<Project>
+
+  <!-- Shared properties for all test projects -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <!-- Suppress test-specific analyser rules -->
+  <PropertyGroup>
+    <!-- CA1707: Identifiers should not contain underscores (test method names use them) -->
+    <!-- CA1515: Public types in test assemblies — xUnit requires public test classes -->
+    <!-- CA1812: Never-instantiated internal classes — test runner instantiates test classes externally -->
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA1812</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

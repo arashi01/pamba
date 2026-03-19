@@ -1,0 +1,47 @@
+<Project>
+
+  <!--
+    Markdown linting via rumdl.
+    Downloads the pinned binary on first use; runs lint during build.
+    https://github.com/rvben/rumdl
+  -->
+
+  <PropertyGroup>
+    <RumdlVersion>0.1.54</RumdlVersion>
+    <RepoRoot>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)', '..'))</RepoRoot>
+    <RumdlToolDir>$(RepoRoot).tools\rumdl\</RumdlToolDir>
+    <RumdlExe>$(RumdlToolDir)rumdl.exe</RumdlExe>
+    <RumdlZip>$(RumdlToolDir)rumdl-v$(RumdlVersion).zip</RumdlZip>
+    <RumdlDownloadUrl>https://github.com/rvben/rumdl/releases/download/v$(RumdlVersion)/rumdl-v$(RumdlVersion)-x86_64-pc-windows-msvc.zip</RumdlDownloadUrl>
+  </PropertyGroup>
+
+  <!-- Download rumdl binary if not present -->
+  <Target Name="RestoreRumdl"
+          BeforeTargets="LintMarkdown;FormatMarkdown"
+          Condition="!Exists('$(RumdlExe)')">
+    <Message Importance="high" Text="Downloading rumdl v$(RumdlVersion)..." />
+    <MakeDir Directories="$(RumdlToolDir)" />
+    <DownloadFile SourceUrl="$(RumdlDownloadUrl)"
+                  DestinationFolder="$(RumdlToolDir)"
+                  DestinationFileName="rumdl-v$(RumdlVersion).zip" />
+    <Unzip SourceFiles="$(RumdlZip)"
+           DestinationFolder="$(RumdlToolDir)"
+           OverwriteReadOnlyFiles="true" />
+    <Delete Files="$(RumdlZip)" />
+  </Target>
+
+  <!-- Lint all markdown files -->
+  <Target Name="LintMarkdown" AfterTargets="Build">
+    <Message Importance="high" Text="Linting Markdown (rumdl v$(RumdlVersion))..." />
+    <Exec Command="&quot;$(RumdlExe)&quot; check &quot;$(RepoRoot).&quot;"
+          WorkingDirectory="$(RepoRoot)" />
+  </Target>
+
+  <!-- Format: dotnet build Pamba.Root.csproj -t:FormatMarkdown -->
+  <Target Name="FormatMarkdown">
+    <Message Importance="high" Text="Formatting Markdown (rumdl v$(RumdlVersion))..." />
+    <Exec Command="&quot;$(RumdlExe)&quot; check --fix &quot;$(RepoRoot).&quot;"
+          WorkingDirectory="$(RepoRoot)" />
+  </Target>
+
+</Project>

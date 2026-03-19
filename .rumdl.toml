@@ -1,0 +1,48 @@
+# rumdl - Markdown linting configuration
+# https://github.com/rvben/rumdl
+
+respect-gitignore = true
+
+# Heading style: ATX only (# Heading)
+[MD003]
+style = "atx"
+
+# Unordered list style: dashes
+[MD004]
+style = "dash"
+
+# List indentation: 2 spaces (matches .editorconfig)
+[MD007]
+indent = 2
+
+# Trailing spaces
+[MD009]
+br_spaces = 2
+
+# No multiple consecutive blank lines
+[MD012]
+maximum = 1
+
+# Line length
+[MD013]
+line_length = 120
+code_blocks = false
+tables = false
+headings = false
+reflow = true
+
+# Allow duplicate headings under different parents
+[MD024]
+siblings_only = true
+
+# Fenced code blocks must specify a language
+[MD040]
+
+# Table column alignment
+[MD060]
+enabled = true
+style = "aligned"
+
+# Code fence style: backtick
+[MD048]
+style = "backtick"
