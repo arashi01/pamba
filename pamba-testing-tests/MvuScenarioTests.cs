@@ -32,7 +32,7 @@ public sealed class MvuScenarioTests
       _ => (state, [])
     },
     Subscriptions = state => state.IsRunning
-        ? [new TestSub(new SubscriptionKey("tick"))]
+        ? [new TestSub(new SubscriptionKey { Value = "tick" })]
         : [],
     OnCommandError = (_, ex) => throw new InvalidOperationException("Unexpected command error", ex),
     OnRuntimeError = err => throw new InvalidOperationException($"Unexpected runtime error: {err}")
@@ -74,5 +74,88 @@ public sealed class MvuScenarioTests
 
     // Init + 2 dispatches = 3 entries
     Assert.Equal(3, runner.History.Length);
+  }
+
+  [Fact]
+  public void For_with_init_assertion_allows_inspecting_init_result()
+  {
+    // P3: Init assertion overload
+    bool initAsserted = false;
+    MvuScenario.For(_program, r =>
+    {
+      Assert.Equal(0, r.State.Count);
+      Assert.False(r.State.IsRunning);
+      initAsserted = true;
+    });
+
+    Assert.True(initAsserted);
+  }
+
+  [Fact]
+  public void DispatchAll_dispatches_multiple_messages_in_sequence()
+  {
+    // P2: DispatchAll
+    MvuScenario.For(_program)
+        .DispatchAll(new TestMsg.Increment(), new TestMsg.Increment(), new TestMsg.Increment())
+        .AssertState(s => Assert.Equal(3, s.Count));
+  }
+
+  [Fact]
+  public void AssertHistory_provides_full_transition_history()
+  {
+    // P2: AssertHistory
+    MvuScenario.For(_program)
+        .Dispatch(new TestMsg.Increment())
+        .Dispatch(new TestMsg.Start())
+        .AssertHistory(h =>
+        {
+          // Init + 2 dispatches = 3 entries
+          Assert.Equal(3, h.Length);
+        });
+  }
+
+  [Fact]
+  public void AssertLastTransition_provides_most_recent_transition()
+  {
+    // P2: AssertLastTransition
+    MvuScenario.For(_program)
+        .Dispatch(new TestMsg.Increment())
+        .Dispatch(new TestMsg.Start())
+        .AssertLastTransition(r =>
+        {
+          Assert.True(r.State.IsRunning);
+          Assert.IsType<TestMsg.Start>(r.Message);
+        });
+  }
+
+  [Fact]
+  public void DispatchWithCorrections_processes_corrective_chain()
+  {
+    // P1: DispatchWithCorrections
+    // Start sets Count=-1, which is rejected by validation.
+    // Corrective message Stop sets Count=50.
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> validatedProgram = new()
+    {
+      Init = () => (new TestState(0, false), []),
+      Update = (msg, state) => msg switch
+      {
+        TestMsg.Increment => (state with { Count = state.Count + 1 }, []),
+        TestMsg.Start => (state with { Count = -1 }, []),
+        TestMsg.Stop => (state with { Count = 50 }, []),
+        _ => (state, [])
+      },
+      Subscriptions = _ => [],
+      OnCommandError = (_, ex) => throw new InvalidOperationException("Unexpected", ex),
+      OnRuntimeError = err => throw new InvalidOperationException($"Unexpected: {err}"),
+      Validate = state => state.Count < 0
+          ? new ValidationResult<TestState, TestMsg>.Invalid(new TestMsg.Stop())
+          : new ValidationResult<TestState, TestMsg>.Valid(state)
+    };
+
+    var runner = MvuScenario.For(validatedProgram)
+        .DispatchWithCorrections(new TestMsg.Start(), 5);
+
+    // Start -> Count=-1 -> rejected -> Stop -> Count=50 -> accepted
+    Assert.Equal(50, runner.State.Count);
   }
 }

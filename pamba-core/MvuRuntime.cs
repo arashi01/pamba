@@ -32,7 +32,9 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
   private readonly SubscriptionManager<TSub, TMsg> _subscriptionManager;
 
 #if DEBUG
-  private readonly List<TransitionRecord<TState, TMsg, TCmd>> _messageHistory;
+  private const int DefaultMaxHistorySize = 1000;
+  private readonly int _maxHistorySize;
+  private readonly Queue<TransitionRecord<TState, TMsg, TCmd, TSub>> _messageHistory;
 #endif
 
   private TState _state;
@@ -44,7 +46,8 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
       SubscriptionStarter<TSub, TMsg> subscriptionStarter,
       Func<Action, bool> enqueue,
       Action<TState>? onInit,
-      Action<TState, TState>? onStateChanged)
+      Action<TState, TState>? onStateChanged,
+      int maxHistorySize)
   {
     _program = program;
     _commandExecutor = commandExecutor;
@@ -56,37 +59,54 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     _subscriptionManager = new SubscriptionManager<TSub, TMsg>(SafeStarter);
 
 #if DEBUG
-    _messageHistory = [];
+    // 0 means not configured (builder default); positive values are pre-validated by builder
+    _maxHistorySize = maxHistorySize > 0 ? maxHistorySize : DefaultMaxHistorySize;
+    _messageHistory = new Queue<TransitionRecord<TState, TMsg, TCmd, TSub>>(_maxHistorySize);
 #endif
 
-    (TState initialState, ImmutableArray<TCmd> startupCmds) = program.Init();
-
-    if (program.Validate is not null)
+    try
     {
-      switch (program.Validate(initialState))
+      (TState initialState, ImmutableArray<TCmd> startupCmds) = program.Init();
+
+      bool hasCorrectiveMessage = false;
+      TMsg correctiveMessage = default!;
+      if (program.Validate is not null)
       {
-        case ValidationResult<TState, TMsg>.Valid v:
-          initialState = v.State;
-          break;
-        case ValidationResult<TState, TMsg>.Invalid i:
-          // Init produced an invalid state - keep it and queue the corrective message
-          startupCmds = ImmutableArray<TCmd>.Empty;
-          _state = initialState;
-          Dispatch(i.Error);
-          break;
+        switch (program.Validate(initialState))
+        {
+          case ValidationResult<TState, TMsg>.Valid v:
+            initialState = v.State;
+            break;
+          case ValidationResult<TState, TMsg>.Invalid i:
+            startupCmds = ImmutableArray<TCmd>.Empty;
+            hasCorrectiveMessage = true;
+            correctiveMessage = i.Error;
+            break;
+        }
+      }
+
+      _state = initialState;
+
+      ImmutableArray<TSub> initialSubs = program.Subscriptions(initialState);
+      _subscriptionManager.Diff(initialSubs, Dispatch);
+
+      onInit?.Invoke(initialState);
+
+      foreach (TCmd cmd in startupCmds)
+      {
+        ExecuteCommand(cmd);
+      }
+
+      if (hasCorrectiveMessage)
+      {
+        Dispatch(correctiveMessage);
       }
     }
-
-    _state = initialState;
-
-    ImmutableArray<TSub> initialSubs = program.Subscriptions(initialState);
-    _subscriptionManager.Diff(initialSubs, Dispatch);
-
-    onInit?.Invoke(initialState);
-
-    foreach (TCmd cmd in startupCmds)
+    catch
     {
-      ExecuteCommand(cmd);
+      _subscriptionManager.Dispose();
+      _cts.Dispose();
+      throw;
     }
 
     return;
@@ -101,7 +121,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
       catch (Exception ex)
       {
         Dispatch(_program.OnRuntimeError(new PambaError.SubscriptionStartFailed(sub.Key, ex)));
-        return new NoopDisposable();
+        return NoopDisposable.Instance;
       }
 #pragma warning restore CA1031
     }
@@ -112,8 +132,9 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 
   /// <summary>
   /// Message history (debug builds only). Null in release.
+  /// Bounded to a configurable maximum size (default 1000).
   /// </summary>
-  public IReadOnlyList<TransitionRecord<TState, TMsg, TCmd>>? MessageHistory =>
+  public IReadOnlyCollection<TransitionRecord<TState, TMsg, TCmd, TSub>>? MessageHistory =>
 #if DEBUG
       _messageHistory;
 #else
@@ -130,9 +151,9 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 
     if (!_enqueue(() => ProcessMessage(message)))
     {
-      // Queue rejected the enqueue - dispatcher has shut down.
-      // Route synchronously since the queue is unavailable.
-      ProcessMessage(_program.OnRuntimeError(new PambaError.DispatchRejected()));
+      // Queue has shut down. Cannot safely mutate state - no thread context for ProcessMessage.
+      // Consumer's OnRuntimeError can observe/log but we do not process the resulting message.
+      _program.OnRuntimeError(new PambaError.DispatchRejected());
     }
   }
 
@@ -161,6 +182,8 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     TState oldState = _state;
     (TState newState, ImmutableArray<TCmd> cmds) = _program.Update(message, oldState);
 
+    bool hasCorrective = false;
+    TMsg corrective = default!;
     if (_program.Validate is not null)
     {
       switch (_program.Validate(newState))
@@ -171,28 +194,40 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
         case ValidationResult<TState, TMsg>.Invalid i:
           newState = oldState;
           cmds = ImmutableArray<TCmd>.Empty;
-          Dispatch(i.Error);
+          hasCorrective = true;
+          corrective = i.Error;
           break;
       }
     }
 
-#if DEBUG
-    _messageHistory.Add(new TransitionRecord<TState, TMsg, TCmd>(
-        message, oldState, newState, cmds));
-#endif
-
     _state = newState;
 
+    ImmutableArray<TSub> newSubs = ImmutableArray<TSub>.Empty;
     if (!oldState.Equals(newState))
     {
-      ImmutableArray<TSub> newSubs = _program.Subscriptions(newState);
+      newSubs = _program.Subscriptions(newState);
       _subscriptionManager.Diff(newSubs, Dispatch);
       _onStateChanged?.Invoke(oldState, newState);
     }
 
+#if DEBUG
+    if (_messageHistory.Count >= _maxHistorySize)
+    {
+      _messageHistory.Dequeue();
+    }
+
+    _messageHistory.Enqueue(new TransitionRecord<TState, TMsg, TCmd, TSub>(
+        message, oldState, newState, cmds, newSubs));
+#endif
+
     foreach (TCmd cmd in cmds)
     {
       ExecuteCommand(cmd);
+    }
+
+    if (hasCorrective)
+    {
+      Dispatch(corrective);
     }
   }
 
@@ -225,6 +260,8 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 
   private sealed class NoopDisposable : IDisposable
   {
+    internal static readonly NoopDisposable Instance = new();
+
     public void Dispose() { }
   }
 }

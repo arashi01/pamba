@@ -20,8 +20,10 @@ public static class MvuRuntimeBuilder
       where TMsg : notnull
       where TCmd : notnull
       where TSub : IEquatable<TSub>, ISubscription<TMsg>
-  =>
-      new Builder<TState, TMsg, TCmd, TSub>(program);
+  {
+    ArgumentNullException.ThrowIfNull(program);
+    return new Builder<TState, TMsg, TCmd, TSub>(program);
+  }
 
   private sealed class Builder<TState, TMsg, TCmd, TSub>
       : IRuntimeWithProgram<TState, TMsg, TCmd, TSub>,
@@ -39,6 +41,7 @@ public static class MvuRuntimeBuilder
     private Func<Action, bool>? _enqueue;
     private Action<TState>? _onInit;
     private Action<TState, TState>? _onStateChanged;
+    private int _maxHistorySize;
 
     internal Builder(MvuProgram<TState, TMsg, TCmd, TSub> program)
     {
@@ -94,6 +97,13 @@ public static class MvuRuntimeBuilder
       return this;
     }
 
+    public IRuntimeReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize)
+    {
+      ArgumentOutOfRangeException.ThrowIfLessThan(maxSize, 1);
+      _maxHistorySize = maxSize;
+      return this;
+    }
+
     public MvuRuntime<TState, TMsg, TCmd, TSub> Start()
     {
       // Null-forgiving: the stepping interfaces guarantee all three are set before Start() is reachable
@@ -103,7 +113,8 @@ public static class MvuRuntimeBuilder
           _subscriptionStarter!,
           _enqueue!,
           _onInit,
-          _onStateChanged);
+          _onStateChanged,
+          _maxHistorySize);
     }
   }
 }
@@ -162,6 +173,12 @@ public interface IRuntimeReady<TState, TMsg, TCmd, TSub>
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
+  /// <summary>
+  /// Set the maximum number of transition records retained in debug message history.
+  /// Default is 1000. Only has effect in debug builds.
+  /// </summary>
+  public IRuntimeReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
+
   /// <summary>
   /// Start the runtime. Calls Init, validates, projects initial state, and executes startup commands.
   /// </summary>

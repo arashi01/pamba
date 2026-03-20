@@ -12,8 +12,10 @@ namespace Pamba;
 /// <typeparam name="TState">State type.</typeparam>
 /// <typeparam name="TMsg">Message type.</typeparam>
 /// <typeparam name="TCmd">Command type.</typeparam>
-public sealed record TransitionRecord<TState, TMsg, TCmd>(
+/// <typeparam name="TSub">Subscription type.</typeparam>
+public sealed record TransitionRecord<TState, TMsg, TCmd, TSub>(
     TMsg Message,
     TState StateBefore,
     TState StateAfter,
-    ImmutableArray<TCmd> Commands);
+    ImmutableArray<TCmd> Commands,
+    ImmutableArray<TSub> Subscriptions);

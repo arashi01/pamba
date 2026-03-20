@@ -11,6 +11,10 @@ namespace Pamba;
 /// All four functions are pure. The runtime executes them.
 /// See <see cref="MvuRuntime{TState, TMsg, TCmd, TSub}"/> for execution.
 /// </summary>
+/// <remarks>
+/// Record equality for this type is identity-based on delegate fields, not semantic.
+/// Do not rely on <see cref="object.Equals(object?)"/> for program equivalence.
+/// </remarks>
 /// <typeparam name="TState">Immutable application state. Must implement value equality.</typeparam>
 /// <typeparam name="TMsg">Message type - sealed record hierarchy.</typeparam>
 /// <typeparam name="TCmd">Command type - sealed record hierarchy describing effects.</typeparam>
@@ -22,6 +26,12 @@ public sealed record MvuProgram<TState, TMsg, TCmd, TSub>
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   /// <summary>Returns the initial state and startup commands.</summary>
+  /// <remarks>
+  /// When <see cref="Validate"/> rejects the initial state, there is no previous state to revert to.
+  /// The runtime keeps the initial state, drops startup commands, and dispatches the corrective message
+  /// after construction completes. With a synchronous dispatcher the corrective message processes
+  /// immediately; with an async dispatcher the invalid initial state is briefly visible.
+  /// </remarks>
   public required Func<(TState State, ImmutableArray<TCmd> Commands)> Init { get; init; }
 
   /// <summary>Pure state transition function. Total over all (TMsg, TState) inputs.</summary>

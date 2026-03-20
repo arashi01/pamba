@@ -34,7 +34,7 @@ public sealed class SubscriptionManagerTests
     Dispatch<TestMsg> dispatch = _ => { };
 
     manager.Diff(
-        [new TestSub(new SubscriptionKey("timer-a")), new TestSub(new SubscriptionKey("timer-b"))],
+        [new TestSub(new SubscriptionKey { Value = "timer-a" }), new TestSub(new SubscriptionKey { Value = "timer-b" })],
         dispatch);
 
     Assert.Equal(2, started.Count);
@@ -57,13 +57,13 @@ public sealed class SubscriptionManagerTests
     Dispatch<TestMsg> dispatch = _ => { };
 
     manager.Diff(
-        [new TestSub(new SubscriptionKey("timer-a")), new TestSub(new SubscriptionKey("timer-b"))],
+        [new TestSub(new SubscriptionKey { Value = "timer-a" }), new TestSub(new SubscriptionKey { Value = "timer-b" })],
         dispatch);
     Assert.False(handles["timer-a"].IsDisposed);
     Assert.False(handles["timer-b"].IsDisposed);
 
     // Remove timer-b
-    manager.Diff([new TestSub(new SubscriptionKey("timer-a"))], dispatch);
+    manager.Diff([new TestSub(new SubscriptionKey { Value = "timer-a" })], dispatch);
 
     Assert.False(handles["timer-a"].IsDisposed);
     Assert.True(handles["timer-b"].IsDisposed);
@@ -82,11 +82,11 @@ public sealed class SubscriptionManagerTests
     using SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
     Dispatch<TestMsg> dispatch = _ => { };
 
-    manager.Diff([new TestSub(new SubscriptionKey("timer-a"))], dispatch);
+    manager.Diff([new TestSub(new SubscriptionKey { Value = "timer-a" })], dispatch);
     Assert.Equal(1, startCount);
 
     // Same subscription, should not restart
-    manager.Diff([new TestSub(new SubscriptionKey("timer-a"))], dispatch);
+    manager.Diff([new TestSub(new SubscriptionKey { Value = "timer-a" })], dispatch);
     Assert.Equal(1, startCount);
   }
 
@@ -105,7 +105,7 @@ public sealed class SubscriptionManagerTests
     Dispatch<TestMsg> dispatch = _ => { };
 
     manager.Diff(
-        [new TestSub(new SubscriptionKey("a")), new TestSub(new SubscriptionKey("b"))],
+        [new TestSub(new SubscriptionKey { Value = "a" }), new TestSub(new SubscriptionKey { Value = "b" })],
         dispatch);
     Assert.False(handles["a"].IsDisposed);
     Assert.False(handles["b"].IsDisposed);
@@ -130,11 +130,48 @@ public sealed class SubscriptionManagerTests
     Dispatch<TestMsg> dispatch = _ => { };
 
     manager.Diff(
-        [new TestSub(new SubscriptionKey("a")), new TestSub(new SubscriptionKey("b")), new TestSub(new SubscriptionKey("c"))],
+        [new TestSub(new SubscriptionKey { Value = "a" }), new TestSub(new SubscriptionKey { Value = "b" }), new TestSub(new SubscriptionKey { Value = "c" })],
         dispatch);
 
     manager.Dispose();
 
     Assert.All(handles.Values, h => Assert.True(h.IsDisposed));
   }
+
+  [Fact]
+  public void Diff_restarts_subscription_when_data_changes()
+  {
+    // C4 regression: same key, different data must stop old and start new
+    List<int> startedIntervals = [];
+    TrackingDisposable? latestHandle = null;
+
+    IDisposable Starter(TestSubWithData sub, Dispatch<TestMsg> dispatch)
+    {
+      startedIntervals.Add(sub.Interval);
+      latestHandle = new TrackingDisposable();
+      return latestHandle;
+    }
+
+    using SubscriptionManager<TestSubWithData, TestMsg> manager = new(Starter);
+    Dispatch<TestMsg> dispatch = _ => { };
+
+    // Start with Interval=5
+    manager.Diff([new TestSubWithData(new SubscriptionKey { Value = "timer" }, 5)], dispatch);
+    Assert.Single(startedIntervals);
+    Assert.Equal(5, startedIntervals[0]);
+    TrackingDisposable firstHandle = latestHandle!;
+
+    // Same key, different Interval=10 -> should restart
+    manager.Diff([new TestSubWithData(new SubscriptionKey { Value = "timer" }, 10)], dispatch);
+    Assert.Equal(2, startedIntervals.Count);
+    Assert.Equal(10, startedIntervals[1]);
+    Assert.True(firstHandle.IsDisposed);
+    Assert.False(latestHandle!.IsDisposed);
+
+    // Same key, same Interval=10 -> should NOT restart
+    manager.Diff([new TestSubWithData(new SubscriptionKey { Value = "timer" }, 10)], dispatch);
+    Assert.Equal(2, startedIntervals.Count); // Still 2, not 3
+  }
+
+  private sealed record TestSubWithData(SubscriptionKey Key, int Interval) : ISubscription<TestMsg>;
 }

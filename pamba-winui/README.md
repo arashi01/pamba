@@ -2,24 +2,17 @@
 
 WinUI 3 integration for the Pamba MVU runtime.
 
-Provides a `DispatcherQueue`-backed runtime factory,
-`StateProjectionBase<TState>` for segment-based UI diffing,
-and timer/delay subscription helpers.
-
-## Install
-
 ```shell
 dotnet add package Pamba.WinUI
 ```
 
-Requires .NET 10 / C# 14, `Pamba`, `Microsoft.WindowsAppSDK`. Minimum platform: Windows 11 22H2.
+Requires .NET 10 / C# 14, `Pamba`, and `Microsoft.WindowsAppSDK`. Minimum platform: Windows 11 22H2.
 
-Namespace: `Pamba.WinUI`.
+## Starting the runtime
 
-## Runtime Factory
-
-`WinUIMvuRuntime` is the WinUI-specific entry point. It captures the
-`DispatcherQueue` at creation and wires it as the thread dispatcher automatically.
+`WinUIMvuRuntime` builds and starts the MVU loop. The builder enforces the correct
+construction order at compile time. Projection is optional - call `.Start()` directly
+after `.WithSubscriptionStarter()` if you have no UI projection.
 
 ```csharp
 MvuRuntime<AppState, Msg, Cmd, Sub> runtime = WinUIMvuRuntime
@@ -30,48 +23,31 @@ MvuRuntime<AppState, Msg, Cmd, Sub> runtime = WinUIMvuRuntime
     .Start();
 ```
 
-### Builder Steps
+## State projection
 
-| Step | Method                                             | Returns                          |
-| ---- | -------------------------------------------------- | -------------------------------- |
-| 1    | `WinUIMvuRuntime.Create(program, dispatcherQueue)` | `IWinUIRuntimeWithProgram`       |
-| 2    | `.WithCommandExecutor(executor)`                   | `IWinUIRuntimeWithExecutor`      |
-| 3    | `.WithSubscriptionStarter(starter)`                | `IWinUIRuntimeWithSubscriptions` |
-| 4a   | `.WithProjection(onStateChanged)`                  | `IWinUIRuntimeReady`             |
-| 4b   | `.WithProjection(onInit, onStateChanged)`          | `IWinUIRuntimeReady`             |
-| 4c   | `.Start()`                                         | `MvuRuntime` (no projection)     |
-| 5    | `.Start()`                                         | `MvuRuntime`                     |
-
-Projection is optional. Call `Start()` directly after step 3 if you do not need state-to-UI projection.
-
-## StateProjectionBase
-
-Abstract base class for mapping state changes to UI updates with automatic diffing.
-Subclass it and register segments in the constructor. Each segment pairs a state
-selector with a UI update action. On each transition, only segments whose selected
-value has changed (by value equality) are invoked.
+`StateProjectionBase<TState>` maps state changes to UI updates. Subclass it and
+register segments in the constructor. Each segment receives a selector that identifies
+a slice of state, and an action that updates the UI for that slice. Only segments whose
+selected value has changed are called on each transition.
 
 ```csharp
 public sealed class AppProjection : StateProjectionBase<AppState>
 {
-  public AppProjection(MainWindow window)
-  {
-    Segment(s => s.Auth, auth => ProjectAuth(window, auth));
-    Segment(s => s.CurrentModule, mod => ProjectNavigation(window, mod));
-    Segment(s => s.Items, items => ProjectItems(window, items));
-  }
-
-  public override void ProjectInitial(AppState initialState)
-  {
-    // Set all UI elements to match the initial state.
-    // Called once during startup via the onInit callback.
-  }
+    public AppProjection(MainWindow window)
+    {
+        Segment(s => s.Auth, auth => ProjectAuth(window, auth));
+        Segment(s => s.CurrentModule, mod => ProjectNavigation(window, mod));
+        Segment(s => s.Items, items => ProjectItems(window, items));
+    }
 }
 ```
 
-### Wiring
+All segments run against the initial state once at startup via `ProjectInitial`. Override
+`ProjectInitial` only if initial UI setup differs from the registered segment actions.
 
-Pass `ProjectInitial` and `Project` as the builder's projection callbacks:
+The selector return type must implement `IEquatable<TSegment>`. C# records satisfy this automatically.
+
+Pass the projection to the builder:
 
 ```csharp
 var projection = new AppProjection(mainWindow);
@@ -83,12 +59,6 @@ WinUIMvuRuntime
     .WithProjection(projection.ProjectInitial, projection.Project)
     .Start();
 ```
-
-`Project(oldState, newState)` is called on the UI thread after every state change
-where `!oldState.Equals(newState)`. It evaluates each registered segment and invokes
-only those whose selected value differs.
-
-The selector return type must implement `IEquatable<TSegment>`. C# records satisfy this automatically.
 
 ## Timer Subscriptions
 
@@ -126,10 +96,77 @@ Wraps a `CommandExecutor` to debounce high-frequency commands. Each invocation c
 var debounced = new CommandDebouncer<Cmd, Msg>(
     delay: TimeSpan.FromMilliseconds(300),
     inner: actualExecutor,
-    dispatcherQueue: dispatcherQueue);
+    dispatcherQueue: dispatcherQueue,
+    onError: (cmd, ex) => new Msg.CommandFailed(cmd, ex.Message));
 
 // Pass debounced.Execute as the command executor
 ```
+
+## Localisation with Lugha
+
+[Lugha](https://github.com/arashi01/lugha) is a typed localisation library for .NET 10 with
+compile-time-enforced text contracts and CLDR pluralisation. The active locale lives in MVU state;
+a projection segment keeps the Lugha `LocaleHost` in sync so that XAML text bindings update
+automatically on locale switch.
+
+Add the locale to your state type:
+
+```csharp
+public sealed record AppState
+{
+    public required IAppLocale Locale { get; init; }
+    // ...
+}
+```
+
+Handle locale switching in `Update` using `LocaleRegistry<TLocale>`:
+
+```csharp
+Msg.LocaleSwitched m =>
+    registry.Resolve(m.LanguageTag) is { } locale
+        ? (state with { Locale = locale }, [])
+        : (state, []),
+```
+
+Register a segment in your projection that calls `SetLocale` when the locale changes:
+
+```csharp
+public sealed class AppProjection : StateProjectionBase<AppState>
+{
+    public AppProjection(MainWindow window, LocaleHost<IAppLocale> localeHost)
+    {
+        Segment(s => s.Locale, locale => localeHost.SetLocale(locale));
+        Segment(s => s.Auth, auth => ProjectAuth(window, auth));
+        // ...
+    }
+}
+```
+
+Wire everything at startup:
+
+```csharp
+var registry = new LocaleRegistry<IAppLocale>([new EnGbLocale(), new ArSaLocale()]);
+var localeHost = new LocaleHost<IAppLocale>(new EnGbLocale(), mainWindow.DispatcherQueue);
+var projection = new AppProjection(mainWindow, localeHost);
+
+_runtime = WinUIMvuRuntime
+    .Create(program, mainWindow.DispatcherQueue)
+    .WithCommandExecutor(executor)
+    .WithSubscriptionStarter(starter)
+    .WithProjection(projection.ProjectInitial, projection.Project)
+    .Start();
+```
+
+Bind text in XAML using Lugha's typed text scopes:
+
+```xml
+<TextBlock Text="{x:Bind localeHost.Current.Navigation.Dashboard, Mode=OneWay}" />
+<TextBlock Text="{x:Bind localeHost.Current.Connection.Connected(ViewModel.Host), Mode=OneWay}" />
+```
+
+For RTL support and system language synchronisation, call `SystemLanguageSync.Apply` inside the
+locale segment action. See the [Lugha.WinUI documentation](https://github.com/arashi01/lugha) for
+details.
 
 ## Related Packages
 

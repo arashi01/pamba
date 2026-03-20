@@ -61,7 +61,8 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
 
     if (_pendingCts is not null)
     {
-      await _pendingCts.CancelAsync().ConfigureAwait(false);
+      // ConfigureAwait(true): continuation must return to UI thread for DispatcherQueueTimer access
+      await _pendingCts.CancelAsync().ConfigureAwait(true);
       _pendingCts.Dispose();
     }
 

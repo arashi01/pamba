@@ -32,7 +32,7 @@ public sealed class MvuTestRunnerTests
       _ => (state, [])
     },
     Subscriptions = state => state.Count > 0
-        ? [new TestSub(new SubscriptionKey("tick-timer"))]
+        ? [new TestSub(new SubscriptionKey { Value = "tick-timer" })]
         : [],
     OnCommandError = (_, ex) => throw new InvalidOperationException("Unexpected command error", ex),
     OnRuntimeError = err => throw new InvalidOperationException($"Unexpected runtime error: {err}"),
@@ -80,5 +80,26 @@ public sealed class MvuTestRunnerTests
     Assert.Empty(result.Commands);
     Assert.NotNull(result.CorrectionMessage);
     Assert.IsType<TestMsg.CountWasNegative>(result.CorrectionMessage);
+  }
+
+  [Fact]
+  public void TransitionResult_extension_WasRejected_reflects_correction()
+  {
+    // P4: TransitionResultExtensions
+    TestState initial = new(0);
+
+    TransitionResult<TestState, TestMsg, TestCmd, TestSub> accepted =
+        MvuTestRunner.UpdateAndValidate(_program, initial, new TestMsg.SetCount(5));
+    Assert.True(accepted.WasAccepted);
+    Assert.False(accepted.WasRejected);
+    Assert.True(accepted.HasCommands);
+    Assert.True(accepted.HasSubscriptions);
+
+    TransitionResult<TestState, TestMsg, TestCmd, TestSub> rejected =
+        MvuTestRunner.UpdateAndValidate(_program, initial, new TestMsg.SetCount(-1));
+    Assert.True(rejected.WasRejected);
+    Assert.False(rejected.WasAccepted);
+    Assert.False(rejected.HasCommands);
+    Assert.False(rejected.HasSubscriptions);
   }
 }

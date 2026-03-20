@@ -25,6 +25,7 @@ public static class WinUIMvuRuntime
       where TCmd : notnull
       where TSub : IEquatable<TSub>, ISubscription<TMsg>
   {
+    ArgumentNullException.ThrowIfNull(program);
     ArgumentNullException.ThrowIfNull(dispatcherQueue);
     return new WinUIBuilder<TState, TMsg, TCmd, TSub>(program, dispatcherQueue);
   }
@@ -45,6 +46,7 @@ public static class WinUIMvuRuntime
     private SubscriptionStarter<TSub, TMsg>? _subscriptionStarter;
     private Action<TState>? _onInit;
     private Action<TState, TState>? _onStateChanged;
+    private int _maxHistorySize;
 
     internal WinUIBuilder(
         MvuProgram<TState, TMsg, TCmd, TSub> program,
@@ -90,6 +92,23 @@ public static class WinUIMvuRuntime
       return this;
     }
 
+    public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize)
+    {
+      ArgumentOutOfRangeException.ThrowIfLessThan(maxSize, 1);
+      _maxHistorySize = maxSize;
+      return this;
+    }
+
+    // Explicit interface implementation: IWinUIRuntimeWithSubscriptions also exposes WithMaxHistorySize
+    // for the no-projection Start() path.
+    IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
+        IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>.WithMaxHistorySize(int maxSize)
+    {
+      ArgumentOutOfRangeException.ThrowIfLessThan(maxSize, 1);
+      _maxHistorySize = maxSize;
+      return this;
+    }
+
     public MvuRuntime<TState, TMsg, TCmd, TSub> Start()
     {
       // TryEnqueue returns bool: true if the action was enqueued, false if the queue has shut down.
@@ -114,6 +133,11 @@ public static class WinUIMvuRuntime
       else
       {
         ready = withSubs.WithDispatcher(enqueue);
+      }
+
+      if (_maxHistorySize > 0)
+      {
+        ready = ready.WithMaxHistorySize(_maxHistorySize);
       }
 
       return ready.Start();
@@ -162,6 +186,9 @@ public interface IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
           Action<TState> onInit,
           Action<TState, TState> onStateChanged);
 
+  /// <summary>Set the maximum debug history size. Default is 1000. Only has effect in debug builds.</summary>
+  public IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
+
   /// <summary>Start without projection.</summary>
   public MvuRuntime<TState, TMsg, TCmd, TSub> Start();
 }
@@ -173,6 +200,9 @@ public interface IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
+  /// <summary>Set the maximum debug history size. Default is 1000. Only has effect in debug builds.</summary>
+  public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
+
   /// <summary>
   /// Start the runtime. Calls Init, projects initial state, and executes startup commands.
   /// </summary>
