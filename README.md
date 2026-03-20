@@ -107,10 +107,10 @@ public abstract record Cmd
 public sealed record Sub(string Key) : ISubscription<Msg>;
 ```
 
-### 2. Define the programme
+### 2. Define the program
 
 ```csharp
-public static readonly MvuProgramme<AppState, Msg, Cmd, Sub> Programme = new()
+public static readonly MvuProgram<AppState, Msg, Cmd, Sub> Program = new()
 {
   Init = () => (new AppState(0), []),
   Update = (msg, state) => msg switch
@@ -135,7 +135,7 @@ public static readonly MvuProgramme<AppState, Msg, Cmd, Sub> Programme = new()
 var projection = new AppProjection(mainWindow);
 
 _runtime = WinUIMvuRuntime
-    .Create(Programme, mainWindow.DispatcherQueue)
+    .Create(Program, mainWindow.DispatcherQueue)
     .WithCommandExecutor(commandExecutor.Execute)
     .WithSubscriptionStarter(subscriptionStarter.Start)
     .WithProjection(projection.ProjectInitial, projection.Project)
@@ -149,7 +149,7 @@ _runtime = WinUIMvuRuntime
 public void Increment_increases_count_and_persists()
 {
   TransitionResult<AppState, Cmd, Sub> result =
-      MvuTestRunner.UpdateAndValidate(Programme, new AppState(0), new Msg.Increment());
+      MvuTestRunner.UpdateAndValidate(Program, new AppState(0), new Msg.Increment());
 
   Assert.Equal(1, result.State.Count);
   Assert.Single(result.Commands);
@@ -159,7 +159,7 @@ public void Increment_increases_count_and_persists()
 [Fact]
 public void Scenario_increments_accumulate()
 {
-  MvuScenario.For(Programme)
+  MvuScenario.For(Program)
       .Dispatch(new Msg.Increment(), r => Assert.Equal(1, r.State.Count))
       .Dispatch(new Msg.Increment(), r => Assert.Equal(2, r.State.Count))
       .Dispatch(new Msg.Decrement())
@@ -177,7 +177,7 @@ my-app/
     Commands/                Cmd hierarchy
     Subscriptions/           Sub hierarchy (implement ISubscription<Msg>)
     Update/                  Update function + sub-updaters
-    Programme.cs             MvuProgramme definition
+    Program.cs             MvuProgram definition
 
   my-app/                    (net10.0-windows, references Pamba.WinUI + my-app-core)
     Shell/

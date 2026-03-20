@@ -8,14 +8,14 @@ namespace Pamba;
 
 /// <summary>
 /// Executes a single command and dispatches resulting messages.
-/// Implemented by the Shell. Async because commands perform I/O.
+/// Implemented by the Shell. Returns <see cref="ValueTask"/> - zero-allocation for synchronous completions.
 /// </summary>
 /// <typeparam name="TCmd">Command type.</typeparam>
 /// <typeparam name="TMsg">Message type.</typeparam>
 /// <param name="command">The command to execute.</param>
 /// <param name="dispatch">Dispatch function for resulting messages.</param>
 /// <param name="cancellationToken">Cancellation token for the operation.</param>
-public delegate Task CommandExecutor<in TCmd, TMsg>(
+public delegate ValueTask CommandExecutor<in TCmd, TMsg>(
     TCmd command,
     Dispatch<TMsg> dispatch,
     CancellationToken cancellationToken);

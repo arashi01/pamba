@@ -3,29 +3,30 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 
 namespace Pamba.Testing;
 
 /// <summary>
-/// Entry point for scenario-based testing of MVU programmes.
+/// Entry point for scenario-based testing of MVU programs.
 /// Dispatches message sequences and provides assertion hooks at each step.
 /// </summary>
 public static class MvuScenario
 {
   /// <summary>
-  /// Create a scenario runner for the given programme.
+  /// Create a scenario runner for the given program.
   /// Calls Init to establish the starting state.
   /// </summary>
   public static ScenarioRunner<TState, TMsg, TCmd, TSub>
       For<TState, TMsg, TCmd, TSub>(
-          MvuProgramme<TState, TMsg, TCmd, TSub> programme)
+          MvuProgram<TState, TMsg, TCmd, TSub> program)
       where TState : IEquatable<TState>
       where TMsg : notnull
       where TCmd : notnull
       where TSub : IEquatable<TSub>, ISubscription<TMsg>
   {
-    var init = MvuTestRunner.InitAndValidate(programme);
-    return new ScenarioRunner<TState, TMsg, TCmd, TSub>(programme, init);
+    var init = MvuTestRunner.InitAndValidate(program);
+    return new ScenarioRunner<TState, TMsg, TCmd, TSub>(program, init);
   }
 }
 
@@ -43,15 +44,15 @@ public sealed class ScenarioRunner<TState, TMsg, TCmd, TSub>
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
-  private readonly MvuProgramme<TState, TMsg, TCmd, TSub> _programme;
-  private readonly List<TransitionResult<TState, TCmd, TSub>> _history;
+  private readonly MvuProgram<TState, TMsg, TCmd, TSub> _program;
+  private readonly List<TransitionResult<TState, TMsg, TCmd, TSub>> _history;
   private TState _currentState;
 
   internal ScenarioRunner(
-      MvuProgramme<TState, TMsg, TCmd, TSub> programme,
-      TransitionResult<TState, TCmd, TSub> initResult)
+      MvuProgram<TState, TMsg, TCmd, TSub> program,
+      TransitionResult<TState, TMsg, TCmd, TSub> initResult)
   {
-    _programme = programme;
+    _program = program;
     _currentState = initResult.State;
     _history = [initResult];
   }
@@ -60,14 +61,16 @@ public sealed class ScenarioRunner<TState, TMsg, TCmd, TSub>
   public TState State => _currentState;
 
   /// <summary>Full transition history including Init.</summary>
-  public IReadOnlyList<TransitionResult<TState, TCmd, TSub>> History => _history;
+  public ImmutableArray<TransitionResult<TState, TMsg, TCmd, TSub>> History =>
+      [.. _history];
 
   /// <summary>Dispatch a message and optionally assert on the result.</summary>
   public ScenarioRunner<TState, TMsg, TCmd, TSub> Dispatch(
       TMsg message,
-      Action<TransitionResult<TState, TCmd, TSub>>? assert)
+      Action<TransitionResult<TState, TMsg, TCmd, TSub>>? assert)
   {
-    var result = MvuTestRunner.UpdateAndValidate(_programme, _currentState, message);
+    TransitionResult<TState, TMsg, TCmd, TSub> result =
+        MvuTestRunner.UpdateAndValidate(_program, _currentState, message);
     _currentState = result.State;
     _history.Add(result);
     assert?.Invoke(result);

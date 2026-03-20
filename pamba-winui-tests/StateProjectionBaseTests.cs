@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Ali Rashid. Licensed under the Apache License, Version 2.0.
 // See LICENSE in the project root for licence information.
 
-using System;
 using System.Collections.Generic;
 using Xunit;
 
@@ -9,7 +8,7 @@ namespace Pamba.WinUI.Tests;
 
 public sealed class StateProjectionBaseTests
 {
-  private sealed record TestState(int Count, string Label) : IEquatable<TestState>;
+  private sealed record TestState(int Count, string Label) : System.IEquatable<TestState>;
 
   private sealed class TestProjection : StateProjectionBase<TestState>
   {
@@ -21,20 +20,14 @@ public sealed class StateProjectionBaseTests
       Segment(s => s.Count, count => CountProjections.Add(count));
       Segment(s => s.Label, label => LabelProjections.Add(label));
     }
-
-    public override void ProjectInitial(TestState initialState)
-    {
-      CountProjections.Add(initialState.Count);
-      LabelProjections.Add(initialState.Label);
-    }
   }
 
   [Fact]
   public void Project_fires_only_changed_segments()
   {
-    var projection = new TestProjection();
-    var oldState = new TestState(1, "hello");
-    var newState = new TestState(2, "hello"); // Only Count changed
+    TestProjection projection = new();
+    TestState oldState = new(1, "hello");
+    TestState newState = new(2, "hello"); // Only Count changed
 
     projection.Project(oldState, newState);
 
@@ -46,9 +39,9 @@ public sealed class StateProjectionBaseTests
   [Fact]
   public void Project_fires_all_changed_segments()
   {
-    var projection = new TestProjection();
-    var oldState = new TestState(1, "hello");
-    var newState = new TestState(2, "world"); // Both changed
+    TestProjection projection = new();
+    TestState oldState = new(1, "hello");
+    TestState newState = new(2, "world"); // Both changed
 
     projection.Project(oldState, newState);
 
@@ -59,8 +52,8 @@ public sealed class StateProjectionBaseTests
   [Fact]
   public void Project_skips_entirely_when_state_unchanged()
   {
-    var projection = new TestProjection();
-    var state = new TestState(1, "hello");
+    TestProjection projection = new();
+    TestState state = new(1, "hello");
 
     projection.Project(state, state);
 
@@ -69,10 +62,10 @@ public sealed class StateProjectionBaseTests
   }
 
   [Fact]
-  public void ProjectInitial_projects_all_segments()
+  public void ProjectInitial_default_implementation_projects_all_segments()
   {
-    var projection = new TestProjection();
-    var initial = new TestState(5, "start");
+    TestProjection projection = new();
+    TestState initial = new(5, "start");
 
     projection.ProjectInitial(initial);
 

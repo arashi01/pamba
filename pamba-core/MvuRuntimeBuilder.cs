@@ -11,20 +11,20 @@ namespace Pamba;
 public static class MvuRuntimeBuilder
 {
   /// <summary>
-  /// Begin constructing a runtime for the given programme.
+  /// Begin constructing a runtime for the given program.
   /// </summary>
-  public static IRuntimeWithProgramme<TState, TMsg, TCmd, TSub>
+  public static IRuntimeWithProgram<TState, TMsg, TCmd, TSub>
       Create<TState, TMsg, TCmd, TSub>(
-          MvuProgramme<TState, TMsg, TCmd, TSub> programme)
+          MvuProgram<TState, TMsg, TCmd, TSub> program)
       where TState : IEquatable<TState>
       where TMsg : notnull
       where TCmd : notnull
       where TSub : IEquatable<TSub>, ISubscription<TMsg>
   =>
-      new Builder<TState, TMsg, TCmd, TSub>(programme);
+      new Builder<TState, TMsg, TCmd, TSub>(program);
 
   private sealed class Builder<TState, TMsg, TCmd, TSub>
-      : IRuntimeWithProgramme<TState, TMsg, TCmd, TSub>,
+      : IRuntimeWithProgram<TState, TMsg, TCmd, TSub>,
         IRuntimeWithExecutor<TState, TMsg, TCmd, TSub>,
         IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>,
         IRuntimeReady<TState, TMsg, TCmd, TSub>
@@ -33,21 +33,22 @@ public static class MvuRuntimeBuilder
       where TCmd : notnull
       where TSub : IEquatable<TSub>, ISubscription<TMsg>
   {
-    private readonly MvuProgramme<TState, TMsg, TCmd, TSub> _programme;
+    private readonly MvuProgram<TState, TMsg, TCmd, TSub> _program;
     private CommandExecutor<TCmd, TMsg>? _commandExecutor;
     private SubscriptionStarter<TSub, TMsg>? _subscriptionStarter;
-    private Action<Action>? _enqueue;
+    private Func<Action, bool>? _enqueue;
     private Action<TState>? _onInit;
     private Action<TState, TState>? _onStateChanged;
 
-    internal Builder(MvuProgramme<TState, TMsg, TCmd, TSub> programme)
+    internal Builder(MvuProgram<TState, TMsg, TCmd, TSub> program)
     {
-      _programme = programme;
+      _program = program;
     }
 
     public IRuntimeWithExecutor<TState, TMsg, TCmd, TSub>
         WithCommandExecutor(CommandExecutor<TCmd, TMsg> executor)
     {
+      ArgumentNullException.ThrowIfNull(executor);
       _commandExecutor = executor;
       return this;
     }
@@ -55,20 +56,24 @@ public static class MvuRuntimeBuilder
     public IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
         WithSubscriptionStarter(SubscriptionStarter<TSub, TMsg> starter)
     {
+      ArgumentNullException.ThrowIfNull(starter);
       _subscriptionStarter = starter;
       return this;
     }
 
     public IRuntimeReady<TState, TMsg, TCmd, TSub>
-        WithDispatcher(Action<Action> enqueue)
+        WithDispatcher(Func<Action, bool> enqueue)
     {
+      ArgumentNullException.ThrowIfNull(enqueue);
       _enqueue = enqueue;
       return this;
     }
 
     public IRuntimeReady<TState, TMsg, TCmd, TSub>
-        WithDispatcher(Action<Action> enqueue, Action<TState, TState> onStateChanged)
+        WithDispatcher(Func<Action, bool> enqueue, Action<TState, TState> onStateChanged)
     {
+      ArgumentNullException.ThrowIfNull(enqueue);
+      ArgumentNullException.ThrowIfNull(onStateChanged);
       _enqueue = enqueue;
       _onStateChanged = onStateChanged;
       return this;
@@ -76,10 +81,13 @@ public static class MvuRuntimeBuilder
 
     public IRuntimeReady<TState, TMsg, TCmd, TSub>
         WithDispatcher(
-            Action<Action> enqueue,
+            Func<Action, bool> enqueue,
             Action<TState> onInit,
             Action<TState, TState> onStateChanged)
     {
+      ArgumentNullException.ThrowIfNull(enqueue);
+      ArgumentNullException.ThrowIfNull(onInit);
+      ArgumentNullException.ThrowIfNull(onStateChanged);
       _enqueue = enqueue;
       _onInit = onInit;
       _onStateChanged = onStateChanged;
@@ -88,8 +96,9 @@ public static class MvuRuntimeBuilder
 
     public MvuRuntime<TState, TMsg, TCmd, TSub> Start()
     {
+      // Null-forgiving: the stepping interfaces guarantee all three are set before Start() is reachable
       return new MvuRuntime<TState, TMsg, TCmd, TSub>(
-          _programme,
+          _program,
           _commandExecutor!,
           _subscriptionStarter!,
           _enqueue!,
@@ -99,8 +108,8 @@ public static class MvuRuntimeBuilder
   }
 }
 
-/// <summary>Step 1: programme provided, needs command executor.</summary>
-public interface IRuntimeWithProgramme<TState, TMsg, TCmd, TSub>
+/// <summary>Step 1: program provided, needs command executor.</summary>
+public interface IRuntimeWithProgram<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
@@ -132,16 +141,16 @@ public interface IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
 {
   /// <summary>Provide the thread dispatcher for FIFO message ordering.</summary>
   public IRuntimeReady<TState, TMsg, TCmd, TSub>
-      WithDispatcher(Action<Action> enqueue);
+      WithDispatcher(Func<Action, bool> enqueue);
 
   /// <summary>Provide the thread dispatcher with a state change callback for projection.</summary>
   public IRuntimeReady<TState, TMsg, TCmd, TSub>
-      WithDispatcher(Action<Action> enqueue, Action<TState, TState> onStateChanged);
+      WithDispatcher(Func<Action, bool> enqueue, Action<TState, TState> onStateChanged);
 
   /// <summary>Provide the thread dispatcher with init and state change callbacks for projection.</summary>
   public IRuntimeReady<TState, TMsg, TCmd, TSub>
       WithDispatcher(
-          Action<Action> enqueue,
+          Func<Action, bool> enqueue,
           Action<TState> onInit,
           Action<TState, TState> onStateChanged);
 }

@@ -18,5 +18,5 @@ public interface ISubscription<out TMsg>
   /// Unique key identifying this subscription instance.
   /// Two subscriptions with the same key are considered the same logical subscription.
   /// </summary>
-  public string Key { get; }
+  public SubscriptionKey Key { get; }
 }

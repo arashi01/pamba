@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using Xunit;
 
 namespace Pamba.Tests;
@@ -11,7 +12,7 @@ public sealed class SubscriptionManagerTests
 {
   private abstract record TestMsg;
 
-  private sealed record TestSub(string Key) : ISubscription<TestMsg>;
+  private sealed record TestSub(SubscriptionKey Key) : ISubscription<TestMsg>;
 
   private sealed class TrackingDisposable : IDisposable
   {
@@ -22,17 +23,19 @@ public sealed class SubscriptionManagerTests
   [Fact]
   public void Diff_starts_new_subscriptions()
   {
-    var started = new List<string>();
+    List<string> started = [];
     IDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
-      started.Add(sub.Key);
+      started.Add(sub.Key.Value);
       return new TrackingDisposable();
     }
 
-    using var manager = new SubscriptionManager<TestSub, TestMsg>(Starter);
+    using SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
     Dispatch<TestMsg> dispatch = _ => { };
 
-    manager.Diff([new TestSub("timer-a"), new TestSub("timer-b")], dispatch);
+    manager.Diff(
+        [new TestSub(new SubscriptionKey("timer-a")), new TestSub(new SubscriptionKey("timer-b"))],
+        dispatch);
 
     Assert.Equal(2, started.Count);
     Assert.Contains("timer-a", started);
@@ -42,23 +45,25 @@ public sealed class SubscriptionManagerTests
   [Fact]
   public void Diff_cancels_removed_subscriptions()
   {
-    var handles = new Dictionary<string, TrackingDisposable>();
+    Dictionary<string, TrackingDisposable> handles = [];
     IDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
-      var handle = new TrackingDisposable();
-      handles[sub.Key] = handle;
+      TrackingDisposable handle = new();
+      handles[sub.Key.Value] = handle;
       return handle;
     }
 
-    using var manager = new SubscriptionManager<TestSub, TestMsg>(Starter);
+    using SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
     Dispatch<TestMsg> dispatch = _ => { };
 
-    manager.Diff([new TestSub("timer-a"), new TestSub("timer-b")], dispatch);
+    manager.Diff(
+        [new TestSub(new SubscriptionKey("timer-a")), new TestSub(new SubscriptionKey("timer-b"))],
+        dispatch);
     Assert.False(handles["timer-a"].IsDisposed);
     Assert.False(handles["timer-b"].IsDisposed);
 
     // Remove timer-b
-    manager.Diff([new TestSub("timer-a")], dispatch);
+    manager.Diff([new TestSub(new SubscriptionKey("timer-a"))], dispatch);
 
     Assert.False(handles["timer-a"].IsDisposed);
     Assert.True(handles["timer-b"].IsDisposed);
@@ -74,36 +79,38 @@ public sealed class SubscriptionManagerTests
       return new TrackingDisposable();
     }
 
-    using var manager = new SubscriptionManager<TestSub, TestMsg>(Starter);
+    using SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
     Dispatch<TestMsg> dispatch = _ => { };
 
-    manager.Diff([new TestSub("timer-a")], dispatch);
+    manager.Diff([new TestSub(new SubscriptionKey("timer-a"))], dispatch);
     Assert.Equal(1, startCount);
 
     // Same subscription, should not restart
-    manager.Diff([new TestSub("timer-a")], dispatch);
+    manager.Diff([new TestSub(new SubscriptionKey("timer-a"))], dispatch);
     Assert.Equal(1, startCount);
   }
 
   [Fact]
   public void Diff_to_empty_cancels_all_subscriptions()
   {
-    var handles = new Dictionary<string, TrackingDisposable>();
+    Dictionary<string, TrackingDisposable> handles = [];
     IDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
-      var handle = new TrackingDisposable();
-      handles[sub.Key] = handle;
+      TrackingDisposable handle = new();
+      handles[sub.Key.Value] = handle;
       return handle;
     }
 
-    using var manager = new SubscriptionManager<TestSub, TestMsg>(Starter);
+    using SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
     Dispatch<TestMsg> dispatch = _ => { };
 
-    manager.Diff([new TestSub("a"), new TestSub("b")], dispatch);
+    manager.Diff(
+        [new TestSub(new SubscriptionKey("a")), new TestSub(new SubscriptionKey("b"))],
+        dispatch);
     Assert.False(handles["a"].IsDisposed);
     Assert.False(handles["b"].IsDisposed);
 
-    manager.Diff([], dispatch);
+    manager.Diff(ImmutableArray<TestSub>.Empty, dispatch);
     Assert.True(handles["a"].IsDisposed);
     Assert.True(handles["b"].IsDisposed);
   }
@@ -111,18 +118,20 @@ public sealed class SubscriptionManagerTests
   [Fact]
   public void Dispose_cancels_all_active_subscriptions()
   {
-    var handles = new Dictionary<string, TrackingDisposable>();
+    Dictionary<string, TrackingDisposable> handles = [];
     IDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
-      var handle = new TrackingDisposable();
-      handles[sub.Key] = handle;
+      TrackingDisposable handle = new();
+      handles[sub.Key.Value] = handle;
       return handle;
     }
 
-    var manager = new SubscriptionManager<TestSub, TestMsg>(Starter);
+    SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
     Dispatch<TestMsg> dispatch = _ => { };
 
-    manager.Diff([new TestSub("a"), new TestSub("b"), new TestSub("c")], dispatch);
+    manager.Diff(
+        [new TestSub(new SubscriptionKey("a")), new TestSub(new SubscriptionKey("b")), new TestSub(new SubscriptionKey("c"))],
+        dispatch);
 
     manager.Dispose();
 

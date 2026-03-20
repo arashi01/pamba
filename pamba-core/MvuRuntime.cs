@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -23,9 +24,9 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
-  private readonly MvuProgramme<TState, TMsg, TCmd, TSub> _programme;
+  private readonly MvuProgram<TState, TMsg, TCmd, TSub> _program;
   private readonly CommandExecutor<TCmd, TMsg> _commandExecutor;
-  private readonly Action<Action> _enqueue;
+  private readonly Func<Action, bool> _enqueue;
   private readonly Action<TState, TState>? _onStateChanged;
   private readonly CancellationTokenSource _cts;
   private readonly SubscriptionManager<TSub, TMsg> _subscriptionManager;
@@ -38,34 +39,47 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
   private volatile bool _disposed;
 
   internal MvuRuntime(
-      MvuProgramme<TState, TMsg, TCmd, TSub> programme,
+      MvuProgram<TState, TMsg, TCmd, TSub> program,
       CommandExecutor<TCmd, TMsg> commandExecutor,
       SubscriptionStarter<TSub, TMsg> subscriptionStarter,
-      Action<Action> enqueue,
+      Func<Action, bool> enqueue,
       Action<TState>? onInit,
       Action<TState, TState>? onStateChanged)
   {
-    _programme = programme;
+    _program = program;
     _commandExecutor = commandExecutor;
     _enqueue = enqueue;
     _onStateChanged = onStateChanged;
     _cts = new CancellationTokenSource();
-    _subscriptionManager = new SubscriptionManager<TSub, TMsg>(subscriptionStarter);
+
+    // Wrap the starter so that exceptions are routed via OnRuntimeError rather than propagating
+    _subscriptionManager = new SubscriptionManager<TSub, TMsg>(SafeStarter);
 
 #if DEBUG
     _messageHistory = [];
 #endif
 
-    (TState initialState, IReadOnlyList<TCmd> startupCmds) = programme.Init();
+    (TState initialState, ImmutableArray<TCmd> startupCmds) = program.Init();
 
-    if (programme.Validate is not null)
+    if (program.Validate is not null)
     {
-      initialState = programme.Validate(initialState);
+      switch (program.Validate(initialState))
+      {
+        case ValidationResult<TState, TMsg>.Valid v:
+          initialState = v.State;
+          break;
+        case ValidationResult<TState, TMsg>.Invalid i:
+          // Init produced an invalid state - keep it and queue the corrective message
+          startupCmds = ImmutableArray<TCmd>.Empty;
+          _state = initialState;
+          Dispatch(i.Error);
+          break;
+      }
     }
 
     _state = initialState;
 
-    IReadOnlyList<TSub> initialSubs = programme.Subscriptions(initialState);
+    ImmutableArray<TSub> initialSubs = program.Subscriptions(initialState);
     _subscriptionManager.Diff(initialSubs, Dispatch);
 
     onInit?.Invoke(initialState);
@@ -73,6 +87,23 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     foreach (TCmd cmd in startupCmds)
     {
       ExecuteCommand(cmd);
+    }
+
+    return;
+
+    IDisposable SafeStarter(TSub sub, Dispatch<TMsg> dispatch)
+    {
+#pragma warning disable CA1031 // Runtime boundary: subscription starter exceptions routed via OnRuntimeError
+      try
+      {
+        return subscriptionStarter(sub, dispatch);
+      }
+      catch (Exception ex)
+      {
+        Dispatch(_program.OnRuntimeError(new PambaError.SubscriptionStartFailed(sub.Key, ex)));
+        return new NoopDisposable();
+      }
+#pragma warning restore CA1031
     }
   }
 
@@ -86,7 +117,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 #if DEBUG
       _messageHistory;
 #else
-        null;
+      null;
 #endif
 
   /// <summary>Dispatch a message into the loop. Thread-safe.</summary>
@@ -97,7 +128,12 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
       return;
     }
 
-    _enqueue(() => ProcessMessage(message));
+    if (!_enqueue(() => ProcessMessage(message)))
+    {
+      // Queue rejected the enqueue - dispatcher has shut down.
+      // Route synchronously since the queue is unavailable.
+      ProcessMessage(_program.OnRuntimeError(new PambaError.DispatchRejected()));
+    }
   }
 
   /// <inheritdoc />
@@ -112,6 +148,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     _cts.Cancel();
     _subscriptionManager.Dispose();
     _cts.Dispose();
+    GC.SuppressFinalize(this);
   }
 
   private void ProcessMessage(TMsg message)
@@ -122,11 +159,21 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
 
     TState oldState = _state;
-    (TState newState, IReadOnlyList<TCmd> cmds) = _programme.Update(message, oldState);
+    (TState newState, ImmutableArray<TCmd> cmds) = _program.Update(message, oldState);
 
-    if (_programme.Validate is not null)
+    if (_program.Validate is not null)
     {
-      newState = _programme.Validate(newState);
+      switch (_program.Validate(newState))
+      {
+        case ValidationResult<TState, TMsg>.Valid v:
+          newState = v.State;
+          break;
+        case ValidationResult<TState, TMsg>.Invalid i:
+          newState = oldState;
+          cmds = ImmutableArray<TCmd>.Empty;
+          Dispatch(i.Error);
+          break;
+      }
     }
 
 #if DEBUG
@@ -138,7 +185,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 
     if (!oldState.Equals(newState))
     {
-      IReadOnlyList<TSub> newSubs = _programme.Subscriptions(newState);
+      ImmutableArray<TSub> newSubs = _program.Subscriptions(newState);
       _subscriptionManager.Diff(newSubs, Dispatch);
       _onStateChanged?.Invoke(oldState, newState);
     }
@@ -149,11 +196,13 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
   }
 
+#pragma warning disable CA2012 // ValueTask fire-and-forget: command execution is intentionally not awaited; all results dispatch back as messages via OnCommandError
   private void ExecuteCommand(TCmd cmd) =>
       _ = ExecuteCommandCore(cmd);
+#pragma warning restore CA2012
 
 #pragma warning disable CA1031 // Runtime boundary: must catch all consumer command executor exceptions to route as typed messages via OnCommandError
-  private async Task ExecuteCommandCore(TCmd cmd)
+  private async ValueTask ExecuteCommandCore(TCmd cmd)
   {
     CancellationToken token = _cts.Token;
     try
@@ -168,9 +217,14 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     {
       if (!_disposed)
       {
-        Dispatch(_programme.OnCommandError(cmd, ex));
+        Dispatch(_program.OnCommandError(cmd, ex));
       }
     }
   }
 #pragma warning restore CA1031
+
+  private sealed class NoopDisposable : IDisposable
+  {
+    public void Dispose() { }
+  }
 }

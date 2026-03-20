@@ -2,11 +2,12 @@
 // See LICENSE in the project root for licence information.
 
 using System;
+using System.Collections.Immutable;
 
 namespace Pamba.Testing;
 
 /// <summary>
-/// Test utilities for MVU programmes.
+/// Test utilities for MVU programs.
 /// Calls Update + Validate + Subscriptions in sequence, returning all results for assertion.
 /// No test framework dependency - works with xUnit, NUnit, MSTest.
 /// </summary>
@@ -14,12 +15,11 @@ public static class MvuTestRunner
 {
   /// <summary>
   /// Call Update, then Validate (if present), then Subscriptions.
-  /// Returns all three results for assertion.
-  /// Throws if validation fails - test fails with invariant violation message.
+  /// Returns all results for assertion including any corrective message produced by a rejecting validator.
   /// </summary>
-  public static TransitionResult<TState, TCmd, TSub>
+  public static TransitionResult<TState, TMsg, TCmd, TSub>
       UpdateAndValidate<TState, TMsg, TCmd, TSub>(
-          MvuProgramme<TState, TMsg, TCmd, TSub> programme,
+          MvuProgram<TState, TMsg, TCmd, TSub> program,
           TState currentState,
           TMsg message)
       where TState : IEquatable<TState>
@@ -27,41 +27,60 @@ public static class MvuTestRunner
       where TCmd : notnull
       where TSub : IEquatable<TSub>, ISubscription<TMsg>
   {
-    ArgumentNullException.ThrowIfNull(programme);
-    var (newState, cmds) = programme.Update(message, currentState);
+    ArgumentNullException.ThrowIfNull(program);
+    (TState newState, ImmutableArray<TCmd> cmds) = program.Update(message, currentState);
+    TMsg? correctionMessage = default;
 
-    if (programme.Validate is not null)
+    if (program.Validate is not null)
     {
-      newState = programme.Validate(newState);
+      switch (program.Validate(newState))
+      {
+        case ValidationResult<TState, TMsg>.Valid v:
+          newState = v.State;
+          break;
+        case ValidationResult<TState, TMsg>.Invalid i:
+          newState = currentState;
+          cmds = ImmutableArray<TCmd>.Empty;
+          correctionMessage = i.Error;
+          break;
+      }
     }
 
-    var subs = programme.Subscriptions(newState);
-
-    return new TransitionResult<TState, TCmd, TSub>(newState, cmds, subs);
+    ImmutableArray<TSub> subs = program.Subscriptions(newState);
+    return new TransitionResult<TState, TMsg, TCmd, TSub>(newState, message, correctionMessage, cmds, subs);
   }
 
   /// <summary>
   /// Call Init, then Validate (if present), then Subscriptions on the initial state.
-  /// Returns all three results for assertion.
+  /// Returns all results for assertion.
   /// </summary>
-  public static TransitionResult<TState, TCmd, TSub>
+  public static TransitionResult<TState, TMsg, TCmd, TSub>
       InitAndValidate<TState, TMsg, TCmd, TSub>(
-          MvuProgramme<TState, TMsg, TCmd, TSub> programme)
+          MvuProgram<TState, TMsg, TCmd, TSub> program)
       where TState : IEquatable<TState>
       where TMsg : notnull
       where TCmd : notnull
       where TSub : IEquatable<TSub>, ISubscription<TMsg>
   {
-    ArgumentNullException.ThrowIfNull(programme);
-    var (initialState, cmds) = programme.Init();
+    ArgumentNullException.ThrowIfNull(program);
+    (TState initialState, ImmutableArray<TCmd> cmds) = program.Init();
+    TMsg? correctionMessage = default;
 
-    if (programme.Validate is not null)
+    if (program.Validate is not null)
     {
-      initialState = programme.Validate(initialState);
+      switch (program.Validate(initialState))
+      {
+        case ValidationResult<TState, TMsg>.Valid v:
+          initialState = v.State;
+          break;
+        case ValidationResult<TState, TMsg>.Invalid i:
+          cmds = ImmutableArray<TCmd>.Empty;
+          correctionMessage = i.Error;
+          break;
+      }
     }
 
-    var subs = programme.Subscriptions(initialState);
-
-    return new TransitionResult<TState, TCmd, TSub>(initialState, cmds, subs);
+    ImmutableArray<TSub> subs = program.Subscriptions(initialState);
+    return new TransitionResult<TState, TMsg, TCmd, TSub>(initialState, default, correctionMessage, cmds, subs);
   }
 }

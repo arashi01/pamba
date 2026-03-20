@@ -21,6 +21,7 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   private readonly TimeSpan _delay;
   private readonly CommandExecutor<TCmd, TMsg> _inner;
   private readonly DispatcherQueueTimer _timer;
+  private readonly Func<TCmd, Exception, TMsg> _onError;
 
   private TCmd? _pendingCommand;
   private Dispatch<TMsg>? _pendingDispatch;
@@ -32,14 +33,18 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   /// <param name="delay">Debounce delay. Each new command resets the timer.</param>
   /// <param name="inner">The actual command executor to invoke after the delay.</param>
   /// <param name="dispatcherQueue">WinUI dispatcher queue for the timer.</param>
+  /// <param name="onError">Maps a failed command and its exception to a message for dispatch.</param>
   public CommandDebouncer(
       TimeSpan delay,
       CommandExecutor<TCmd, TMsg> inner,
-      DispatcherQueue dispatcherQueue)
+      DispatcherQueue dispatcherQueue,
+      Func<TCmd, Exception, TMsg> onError)
   {
     ArgumentNullException.ThrowIfNull(dispatcherQueue);
+    ArgumentNullException.ThrowIfNull(onError);
     _delay = delay;
     _inner = inner;
+    _onError = onError;
     _timer = dispatcherQueue.CreateTimer();
     _timer.Interval = delay;
     _timer.IsRepeating = false;
@@ -50,7 +55,7 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   /// Schedule a command for debounced execution.
   /// Cancels any previously pending command.
   /// </summary>
-  public async Task Execute(TCmd command, Dispatch<TMsg> dispatch, CancellationToken ct)
+  public async ValueTask Execute(TCmd command, Dispatch<TMsg> dispatch, CancellationToken ct)
   {
     _timer.Stop();
 
@@ -74,8 +79,14 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
     _timer.Stop();
     _pendingCts?.Cancel();
     _pendingCts?.Dispose();
+    GC.SuppressFinalize(this);
   }
 
+  /// <remarks>
+  /// <c>async void</c> is required here: <see cref="DispatcherQueueTimer.Tick"/> is
+  /// <c>EventHandler&lt;object&gt;</c> and cannot return <see cref="Task"/> or <see cref="ValueTask"/>.
+  /// All exceptions from the inner executor are caught and routed via <c>_onError</c>.
+  /// </remarks>
   private async void OnTimerTick(DispatcherQueueTimer sender, object args)
   {
     _timer.Stop();
@@ -85,9 +96,9 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
       return;
     }
 
-    var cmd = _pendingCommand;
-    var dispatch = _pendingDispatch;
-    var cts = _pendingCts;
+    TCmd cmd = _pendingCommand;
+    Dispatch<TMsg> dispatch = _pendingDispatch;
+    CancellationTokenSource cts = _pendingCts;
 
     _pendingCommand = default;
     _pendingDispatch = null;
@@ -95,7 +106,20 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
 
     if (!cts.Token.IsCancellationRequested)
     {
-      await _inner(cmd, dispatch, cts.Token).ConfigureAwait(false);
+      try
+      {
+        await _inner(cmd, dispatch, cts.Token).ConfigureAwait(false);
+      }
+      catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
+      {
+        // Expected cancellation during debounce reset or disposal
+      }
+#pragma warning disable CA1031 // Runtime boundary: async void event handler; exception routed as typed message via onError
+      catch (Exception ex)
+      {
+        dispatch(_onError(cmd, ex));
+      }
+#pragma warning restore CA1031
     }
 
     cts.Dispose();

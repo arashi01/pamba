@@ -1,6 +1,6 @@
 # Pamba.Testing
 
-Test utilities for Pamba MVU programmes. Calls `Update`, `Validate`, and
+Test utilities for Pamba MVU programs. Calls `Update`, `Validate`, and
 `Subscriptions` in the correct sequence and returns all results for assertion.
 
 No test framework dependency - works with xUnit, NUnit, MSTest, or any assertion library.
@@ -24,7 +24,7 @@ invariant violation message.
 
 ```csharp
 TransitionResult<AppState, Cmd, Sub> result =
-    MvuTestRunner.UpdateAndValidate(programme, currentState, new Msg.Increment());
+    MvuTestRunner.UpdateAndValidate(program, currentState, new Msg.Increment());
 
 Assert.Equal(1, result.State.Count);
 Assert.Single(result.Commands);
@@ -38,7 +38,7 @@ Calls `Init()`, then `Validate` (if present), then `Subscriptions(initialState)`
 
 ```csharp
 TransitionResult<AppState, Cmd, Sub> result =
-    MvuTestRunner.InitAndValidate(programme);
+    MvuTestRunner.InitAndValidate(program);
 
 Assert.Equal(0, result.State.Count);
 Assert.Contains(result.Commands, c => c is Cmd.LoadPreferences);
@@ -60,11 +60,11 @@ or pattern matching directly.
 ## MvuScenario
 
 Fluent API for multi-step flow testing. Dispatches a sequence of messages through
-the programme, preserving state between steps. Each step optionally accepts an
+the program, preserving state between steps. Each step optionally accepts an
 assertion on the transition result.
 
 ```csharp
-MvuScenario.For(programme)
+MvuScenario.For(program)
     .Dispatch(new Msg.Start(), r =>
     {
       Assert.True(r.State.IsRunning);
@@ -77,14 +77,14 @@ MvuScenario.For(programme)
 
 ### API
 
-| Method                       | Purpose                                                    |
-| ---------------------------- | ---------------------------------------------------------- |
-| `MvuScenario.For(programme)` | Create a runner. Calls `Init` to establish starting state. |
-| `.Dispatch(msg)`             | Advance state by one message.                              |
-| `.Dispatch(msg, assert)`     | Advance and assert on the `TransitionResult`.              |
-| `.AssertState(assert)`       | Assert on the current accumulated state.                   |
-| `.State`                     | Current state after all dispatched messages.               |
-| `.History`                   | Full list of `TransitionResult` entries, including `Init`. |
+| Method                     | Purpose                                                    |
+| -------------------------- | ---------------------------------------------------------- |
+| `MvuScenario.For(program)` | Create a runner. Calls `Init` to establish starting state. |
+| `.Dispatch(msg)`           | Advance state by one message.                              |
+| `.Dispatch(msg, assert)`   | Advance and assert on the `TransitionResult`.              |
+| `.AssertState(assert)`     | Assert on the current accumulated state.                   |
+| `.State`                   | Current state after all dispatched messages.               |
+| `.History`                 | Full list of `TransitionResult` entries, including `Init`. |
 
 All methods return the runner for chaining. `History` includes the `Init` result
 at index 0, followed by one entry per `Dispatch` call.
