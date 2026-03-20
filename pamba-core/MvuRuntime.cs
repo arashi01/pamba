@@ -32,7 +32,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
   private readonly SubscriptionManager<TSub, TMsg> _subscriptionManager;
 
 #if DEBUG
-  private const int DefaultMaxHistorySize = 1000;
+  private const int _defaultMaxHistorySize = 1000;
   private readonly int _maxHistorySize;
   private readonly Queue<TransitionRecord<TState, TMsg, TCmd, TSub>> _messageHistory;
 #endif
@@ -60,7 +60,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 
 #if DEBUG
     // 0 means not configured (builder default); positive values are pre-validated by builder
-    _maxHistorySize = maxHistorySize > 0 ? maxHistorySize : DefaultMaxHistorySize;
+    _maxHistorySize = maxHistorySize > 0 ? maxHistorySize : _defaultMaxHistorySize;
     _messageHistory = new Queue<TransitionRecord<TState, TMsg, TCmd, TSub>>(_maxHistorySize);
 #endif
 
@@ -121,7 +121,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
       catch (Exception ex)
       {
         Dispatch(_program.OnRuntimeError(new PambaError.SubscriptionStartFailed(sub.Key, ex)));
-        return NoopDisposable.Instance;
+        return NoopDisposable._instance;
       }
 #pragma warning restore CA1031
     }
@@ -260,7 +260,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 
   private sealed class NoopDisposable : IDisposable
   {
-    internal static readonly NoopDisposable Instance = new();
+    internal static readonly NoopDisposable _instance = new();
 
     public void Dispose() { }
   }
