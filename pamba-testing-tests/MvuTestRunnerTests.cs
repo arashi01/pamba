@@ -13,6 +13,7 @@ public sealed class MvuTestRunnerTests
   private abstract record TestMsg
   {
     internal sealed record SetCount(int Value) : TestMsg;
+    internal sealed record CountWasNegative : TestMsg;
   }
 
   private abstract record TestCmd
@@ -20,9 +21,9 @@ public sealed class MvuTestRunnerTests
     internal sealed record Persist(int Value) : TestCmd;
   }
 
-  private sealed record TestSub(string Key) : ISubscription<TestMsg>;
+  private sealed record TestSub(SubscriptionKey Key) : ISubscription<TestMsg>;
 
-  private static readonly MvuProgramme<TestState, TestMsg, TestCmd, TestSub> _programme = new()
+  private static readonly MvuProgram<TestState, TestMsg, TestCmd, TestSub> _program = new()
   {
     Init = () => (new TestState(0), []),
     Update = (msg, state) => msg switch
@@ -31,43 +32,53 @@ public sealed class MvuTestRunnerTests
       _ => (state, [])
     },
     Subscriptions = state => state.Count > 0
-        ? [new TestSub("tick-timer")]
+        ? [new TestSub(new SubscriptionKey("tick-timer"))]
         : [],
     OnCommandError = (_, ex) => throw new InvalidOperationException("Unexpected command error", ex),
+    OnRuntimeError = err => throw new InvalidOperationException($"Unexpected runtime error: {err}"),
     Validate = state => state.Count >= 0
-        ? state
-        : throw new InvalidOperationException($"Count must be non-negative: {state.Count}")
+        ? new ValidationResult<TestState, TestMsg>.Valid(state)
+        : new ValidationResult<TestState, TestMsg>.Invalid(new TestMsg.CountWasNegative())
   };
 
   [Fact]
   public void InitAndValidate_returns_initial_state_and_subscriptions()
   {
-    TransitionResult<TestState, TestCmd, TestSub> result = MvuTestRunner.InitAndValidate(_programme);
+    TransitionResult<TestState, TestMsg, TestCmd, TestSub> result = MvuTestRunner.InitAndValidate(_program);
 
     Assert.Equal(0, result.State.Count);
     Assert.Empty(result.Commands);
     Assert.Empty(result.Subscriptions);
+    Assert.Null(result.Message);
+    Assert.Null(result.CorrectionMessage);
   }
 
   [Fact]
   public void UpdateAndValidate_returns_state_commands_and_subscriptions()
   {
-    var initial = new TestState(0);
-    TransitionResult<TestState, TestCmd, TestSub> result = MvuTestRunner.UpdateAndValidate(_programme, initial, new TestMsg.SetCount(5));
+    TestState initial = new(0);
+    TransitionResult<TestState, TestMsg, TestCmd, TestSub> result =
+        MvuTestRunner.UpdateAndValidate(_program, initial, new TestMsg.SetCount(5));
 
     Assert.Equal(5, result.State.Count);
     Assert.Single(result.Commands);
     Assert.IsType<TestCmd.Persist>(result.Commands[0]);
     Assert.Single(result.Subscriptions);
-    Assert.Equal("tick-timer", result.Subscriptions[0].Key);
+    Assert.Equal("tick-timer", result.Subscriptions[0].Key.Value);
+    Assert.Null(result.CorrectionMessage);
   }
 
   [Fact]
-  public void UpdateAndValidate_throws_on_invariant_violation()
+  public void UpdateAndValidate_returns_correction_message_when_validation_rejects()
   {
-    var initial = new TestState(0);
+    TestState initial = new(0);
+    TransitionResult<TestState, TestMsg, TestCmd, TestSub> result =
+        MvuTestRunner.UpdateAndValidate(_program, initial, new TestMsg.SetCount(-1));
 
-    Assert.Throws<InvalidOperationException>(() =>
-        MvuTestRunner.UpdateAndValidate(_programme, initial, new TestMsg.SetCount(-1)));
+    // Transition rejected: state reverts to initial, commands dropped
+    Assert.Equal(0, result.State.Count);
+    Assert.Empty(result.Commands);
+    Assert.NotNull(result.CorrectionMessage);
+    Assert.IsType<TestMsg.CountWasNegative>(result.CorrectionMessage);
   }
 }

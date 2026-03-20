@@ -23,7 +23,7 @@ Namespace: `Pamba.WinUI`.
 
 ```csharp
 MvuRuntime<AppState, Msg, Cmd, Sub> runtime = WinUIMvuRuntime
-    .Create(programme, mainWindow.DispatcherQueue)
+    .Create(program, mainWindow.DispatcherQueue)
     .WithCommandExecutor(commandExecutor.Execute)
     .WithSubscriptionStarter(subscriptionStarter.Start)
     .WithProjection(projection.ProjectInitial, projection.Project)
@@ -32,15 +32,15 @@ MvuRuntime<AppState, Msg, Cmd, Sub> runtime = WinUIMvuRuntime
 
 ### Builder Steps
 
-| Step | Method                                               | Returns                          |
-| ---- | ---------------------------------------------------- | -------------------------------- |
-| 1    | `WinUIMvuRuntime.Create(programme, dispatcherQueue)` | `IWinUIRuntimeWithProgramme`     |
-| 2    | `.WithCommandExecutor(executor)`                     | `IWinUIRuntimeWithExecutor`      |
-| 3    | `.WithSubscriptionStarter(starter)`                  | `IWinUIRuntimeWithSubscriptions` |
-| 4a   | `.WithProjection(onStateChanged)`                    | `IWinUIRuntimeReady`             |
-| 4b   | `.WithProjection(onInit, onStateChanged)`            | `IWinUIRuntimeReady`             |
-| 4c   | `.Start()`                                           | `MvuRuntime` (no projection)     |
-| 5    | `.Start()`                                           | `MvuRuntime`                     |
+| Step | Method                                             | Returns                          |
+| ---- | -------------------------------------------------- | -------------------------------- |
+| 1    | `WinUIMvuRuntime.Create(program, dispatcherQueue)` | `IWinUIRuntimeWithProgram`       |
+| 2    | `.WithCommandExecutor(executor)`                   | `IWinUIRuntimeWithExecutor`      |
+| 3    | `.WithSubscriptionStarter(starter)`                | `IWinUIRuntimeWithSubscriptions` |
+| 4a   | `.WithProjection(onStateChanged)`                  | `IWinUIRuntimeReady`             |
+| 4b   | `.WithProjection(onInit, onStateChanged)`          | `IWinUIRuntimeReady`             |
+| 4c   | `.Start()`                                         | `MvuRuntime` (no projection)     |
+| 5    | `.Start()`                                         | `MvuRuntime`                     |
 
 Projection is optional. Call `Start()` directly after step 3 if you do not need state-to-UI projection.
 
@@ -77,7 +77,7 @@ Pass `ProjectInitial` and `Project` as the builder's projection callbacks:
 var projection = new AppProjection(mainWindow);
 
 WinUIMvuRuntime
-    .Create(programme, mainWindow.DispatcherQueue)
+    .Create(program, mainWindow.DispatcherQueue)
     .WithCommandExecutor(executor)
     .WithSubscriptionStarter(starter)
     .WithProjection(projection.ProjectInitial, projection.Project)

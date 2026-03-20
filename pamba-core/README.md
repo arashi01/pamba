@@ -3,7 +3,7 @@
 Framework-agnostic MVU (Model-View-Update) runtime for .NET 10 / C# 14.
 
 Provides the dispatch loop, command execution infrastructure, subscription lifecycle
-management, and the contracts that define an MVU programme. Zero UI dependencies -
+management, and the contracts that define an MVU program. Zero UI dependencies -
 wire to any framework by providing a thread dispatcher.
 
 ## Install
@@ -16,12 +16,12 @@ Requires .NET 10 / C# 14. Namespace: `Pamba`.
 
 ## Key Concepts
 
-### Programme
+### Program
 
-An MVU programme is five functions packaged as a single record:
+An MVU program is five functions packaged as a single record:
 
 ```csharp
-MvuProgramme<TState, TMsg, TCmd, TSub>
+MvuProgram<TState, TMsg, TCmd, TSub>
 ```
 
 | Function         | Signature                                         | Purpose                                                                   |
@@ -85,7 +85,7 @@ misconfiguration is a compile error, not a runtime error.
 
 ```csharp
 MvuRuntime<TState, TMsg, TCmd, TSub> runtime = MvuRuntimeBuilder
-    .Create(programme)
+    .Create(program)
     .WithCommandExecutor(executor)
     .WithSubscriptionStarter(starter)
     .WithDispatcher(
@@ -139,10 +139,10 @@ public abstract record Cmd
 public sealed record Sub(string Key) : ISubscription<Msg>;
 ```
 
-### Define Programme
+### Define Program
 
 ```csharp
-public static readonly MvuProgramme<AppState, Msg, Cmd, Sub> Programme = new()
+public static readonly MvuProgram<AppState, Msg, Cmd, Sub> Program = new()
 {
   Init = () => (new AppState(0), []),
   Update = (msg, state) => msg switch
@@ -161,7 +161,7 @@ public static readonly MvuProgramme<AppState, Msg, Cmd, Sub> Programme = new()
 
 ```csharp
 using MvuRuntime<AppState, Msg, Cmd, Sub> runtime = MvuRuntimeBuilder
-    .Create(Programme)
+    .Create(Program)
     .WithCommandExecutor(myExecutor)
     .WithSubscriptionStarter(myStarter)
     .WithDispatcher(dispatcherQueue.TryEnqueue)
@@ -179,7 +179,7 @@ cancels in-flight commands via `CancellationToken`, and causes subsequent
 ```csharp
 // Recommended: using declaration ensures disposal
 using MvuRuntime<AppState, Msg, Cmd, Sub> runtime = MvuRuntimeBuilder
-    .Create(programme)
+    .Create(program)
     .WithCommandExecutor(executor)
     .WithSubscriptionStarter(starter)
     .WithDispatcher(enqueue)

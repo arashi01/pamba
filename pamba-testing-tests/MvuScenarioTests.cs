@@ -19,9 +19,9 @@ public sealed class MvuScenarioTests
 
   private abstract record TestCmd;
 
-  private sealed record TestSub(string Key) : ISubscription<TestMsg>;
+  private sealed record TestSub(SubscriptionKey Key) : ISubscription<TestMsg>;
 
-  private static readonly MvuProgramme<TestState, TestMsg, TestCmd, TestSub> _programme = new()
+  private static readonly MvuProgram<TestState, TestMsg, TestCmd, TestSub> _program = new()
   {
     Init = () => (new TestState(0, false), []),
     Update = (msg, state) => msg switch
@@ -32,15 +32,16 @@ public sealed class MvuScenarioTests
       _ => (state, [])
     },
     Subscriptions = state => state.IsRunning
-        ? [new TestSub("tick")]
+        ? [new TestSub(new SubscriptionKey("tick"))]
         : [],
-    OnCommandError = (_, ex) => throw new InvalidOperationException("Unexpected command error", ex)
+    OnCommandError = (_, ex) => throw new InvalidOperationException("Unexpected command error", ex),
+    OnRuntimeError = err => throw new InvalidOperationException($"Unexpected runtime error: {err}")
   };
 
   [Fact]
   public void Scenario_dispatches_sequence_and_preserves_state()
   {
-    MvuScenario.For(_programme)
+    MvuScenario.For(_program)
         .Dispatch(new TestMsg.Increment(), r => Assert.Equal(1, r.State.Count))
         .Dispatch(new TestMsg.Increment(), r => Assert.Equal(2, r.State.Count))
         .Dispatch(new TestMsg.Increment())
@@ -50,12 +51,12 @@ public sealed class MvuScenarioTests
   [Fact]
   public void Scenario_tracks_subscription_changes()
   {
-    MvuScenario.For(_programme)
+    MvuScenario.For(_program)
         .Dispatch(new TestMsg.Start(), r =>
         {
           Assert.True(r.State.IsRunning);
           Assert.Single(r.Subscriptions);
-          Assert.Equal("tick", r.Subscriptions[0].Key);
+          Assert.Equal("tick", r.Subscriptions[0].Key.Value);
         })
         .Dispatch(new TestMsg.Stop(), r =>
         {
@@ -67,11 +68,11 @@ public sealed class MvuScenarioTests
   [Fact]
   public void Scenario_history_includes_init_and_all_transitions()
   {
-    ScenarioRunner<TestState, TestMsg, TestCmd, TestSub> runner = MvuScenario.For(_programme)
+    ScenarioRunner<TestState, TestMsg, TestCmd, TestSub> runner = MvuScenario.For(_program)
         .Dispatch(new TestMsg.Increment())
         .Dispatch(new TestMsg.Increment());
 
     // Init + 2 dispatches = 3 entries
-    Assert.Equal(3, runner.History.Count);
+    Assert.Equal(3, runner.History.Length);
   }
 }

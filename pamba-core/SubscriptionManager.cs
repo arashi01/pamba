@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 
 namespace Pamba;
 
@@ -14,9 +15,9 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   private readonly SubscriptionStarter<TSub, TMsg> _starter;
-  private readonly Dictionary<string, IDisposable> _active;
-  private readonly HashSet<string> _currentKeys;
-  private readonly List<string> _removalBuffer;
+  private readonly Dictionary<SubscriptionKey, IDisposable> _active;
+  private readonly HashSet<SubscriptionKey> _currentKeys;
+  private readonly List<SubscriptionKey> _removalBuffer;
 
   internal SubscriptionManager(SubscriptionStarter<TSub, TMsg> starter)
   {
@@ -30,7 +31,7 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
   /// Diff previous and current subscription sets.
   /// Start new subscriptions, cancel removed ones, keep unchanged ones.
   /// </summary>
-  internal void Diff(IReadOnlyList<TSub> current, Dispatch<TMsg> dispatch)
+  internal void Diff(ImmutableArray<TSub> current, Dispatch<TMsg> dispatch)
   {
     _currentKeys.Clear();
 
@@ -46,7 +47,7 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
 
     _removalBuffer.Clear();
 
-    foreach (string key in _active.Keys)
+    foreach (SubscriptionKey key in _active.Keys)
     {
       if (!_currentKeys.Contains(key))
       {
@@ -54,9 +55,15 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
       }
     }
 
-    foreach (string key in _removalBuffer)
+    foreach (SubscriptionKey key in _removalBuffer)
     {
-      _active[key].Dispose();
+#pragma warning disable CA1031 // Subscription dispose must not block cleanup of remaining subscriptions
+      try
+      {
+        _active[key].Dispose();
+      }
+      catch { }
+#pragma warning restore CA1031
       _active.Remove(key);
     }
   }
@@ -66,7 +73,13 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
   {
     foreach (IDisposable handle in _active.Values)
     {
-      handle.Dispose();
+#pragma warning disable CA1031 // Subscription dispose must not block cleanup of remaining subscriptions
+      try
+      {
+        handle.Dispose();
+      }
+      catch { }
+#pragma warning restore CA1031
     }
 
     _active.Clear();

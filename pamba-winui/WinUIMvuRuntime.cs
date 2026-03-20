@@ -16,9 +16,9 @@ public static class WinUIMvuRuntime
   /// Begin constructing a WinUI-backed MVU runtime.
   /// Pre-wires the thread dispatcher to <paramref name="dispatcherQueue"/>.
   /// </summary>
-  public static IWinUIRuntimeWithProgramme<TState, TMsg, TCmd, TSub>
+  public static IWinUIRuntimeWithProgram<TState, TMsg, TCmd, TSub>
       Create<TState, TMsg, TCmd, TSub>(
-          MvuProgramme<TState, TMsg, TCmd, TSub> programme,
+          MvuProgram<TState, TMsg, TCmd, TSub> program,
           DispatcherQueue dispatcherQueue)
       where TState : IEquatable<TState>
       where TMsg : notnull
@@ -26,11 +26,11 @@ public static class WinUIMvuRuntime
       where TSub : IEquatable<TSub>, ISubscription<TMsg>
   {
     ArgumentNullException.ThrowIfNull(dispatcherQueue);
-    return new WinUIBuilder<TState, TMsg, TCmd, TSub>(programme, dispatcherQueue);
+    return new WinUIBuilder<TState, TMsg, TCmd, TSub>(program, dispatcherQueue);
   }
 
   private sealed class WinUIBuilder<TState, TMsg, TCmd, TSub>
-      : IWinUIRuntimeWithProgramme<TState, TMsg, TCmd, TSub>,
+      : IWinUIRuntimeWithProgram<TState, TMsg, TCmd, TSub>,
         IWinUIRuntimeWithExecutor<TState, TMsg, TCmd, TSub>,
         IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>,
         IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
@@ -39,7 +39,7 @@ public static class WinUIMvuRuntime
       where TCmd : notnull
       where TSub : IEquatable<TSub>, ISubscription<TMsg>
   {
-    private readonly MvuProgramme<TState, TMsg, TCmd, TSub> _programme;
+    private readonly MvuProgram<TState, TMsg, TCmd, TSub> _program;
     private readonly DispatcherQueue _dispatcherQueue;
     private CommandExecutor<TCmd, TMsg>? _commandExecutor;
     private SubscriptionStarter<TSub, TMsg>? _subscriptionStarter;
@@ -47,16 +47,17 @@ public static class WinUIMvuRuntime
     private Action<TState, TState>? _onStateChanged;
 
     internal WinUIBuilder(
-        MvuProgramme<TState, TMsg, TCmd, TSub> programme,
+        MvuProgram<TState, TMsg, TCmd, TSub> program,
         DispatcherQueue dispatcherQueue)
     {
-      _programme = programme;
+      _program = program;
       _dispatcherQueue = dispatcherQueue;
     }
 
     public IWinUIRuntimeWithExecutor<TState, TMsg, TCmd, TSub>
         WithCommandExecutor(CommandExecutor<TCmd, TMsg> executor)
     {
+      ArgumentNullException.ThrowIfNull(executor);
       _commandExecutor = executor;
       return this;
     }
@@ -64,6 +65,7 @@ public static class WinUIMvuRuntime
     public IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
         WithSubscriptionStarter(SubscriptionStarter<TSub, TMsg> starter)
     {
+      ArgumentNullException.ThrowIfNull(starter);
       _subscriptionStarter = starter;
       return this;
     }
@@ -71,6 +73,7 @@ public static class WinUIMvuRuntime
     public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
         WithProjection(Action<TState, TState> onStateChanged)
     {
+      ArgumentNullException.ThrowIfNull(onStateChanged);
       _onStateChanged = onStateChanged;
       return this;
     }
@@ -80,6 +83,8 @@ public static class WinUIMvuRuntime
             Action<TState> onInit,
             Action<TState, TState> onStateChanged)
     {
+      ArgumentNullException.ThrowIfNull(onInit);
+      ArgumentNullException.ThrowIfNull(onStateChanged);
       _onInit = onInit;
       _onStateChanged = onStateChanged;
       return this;
@@ -87,10 +92,12 @@ public static class WinUIMvuRuntime
 
     public MvuRuntime<TState, TMsg, TCmd, TSub> Start()
     {
-      Action<Action> enqueue = action => _dispatcherQueue.TryEnqueue(() => action());
+      // TryEnqueue returns bool: true if the action was enqueued, false if the queue has shut down.
+      // The bool is propagated to MvuRuntime which routes false as PambaError.DispatchRejected.
+      Func<Action, bool> enqueue = action => _dispatcherQueue.TryEnqueue(() => action());
 
       IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub> withSubs = MvuRuntimeBuilder
-          .Create(_programme)
+          .Create(_program)
           .WithCommandExecutor(_commandExecutor!)
           .WithSubscriptionStarter(_subscriptionStarter!);
 
@@ -114,8 +121,8 @@ public static class WinUIMvuRuntime
   }
 }
 
-/// <summary>Step 1: programme and dispatcher provided, needs command executor.</summary>
-public interface IWinUIRuntimeWithProgramme<TState, TMsg, TCmd, TSub>
+/// <summary>Step 1: program and dispatcher provided, needs command executor.</summary>
+public interface IWinUIRuntimeWithProgram<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
