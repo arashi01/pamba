@@ -100,7 +100,8 @@ at index 0, followed by one entry per `Dispatch` call.
 ## Related Packages
 
 - **Pamba** - Framework-agnostic core: contracts, dispatch loop, command/subscription infrastructure.
-- **Pamba.WinUI** - WinUI 3 integration with `DispatcherQueue`, `StateProjectionBase`, and timer subscription helpers.
+- **Pamba.WinUI** - WinUI 3 integration with `DispatcherQueue`, `StateProjectionBase`,
+  timer/event subscription helpers, and command debouncer.
 
 ## Licence
 

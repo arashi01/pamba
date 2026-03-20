@@ -26,6 +26,7 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   private TCmd? _pendingCommand;
   private Dispatch<TMsg>? _pendingDispatch;
   private CancellationTokenSource? _pendingCts;
+  private bool _flushed;
 
   /// <summary>
   /// Create a debouncer wrapping an inner command executor.
@@ -54,9 +55,15 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   /// <summary>
   /// Schedule a command for debounced execution.
   /// Cancels any previously pending command.
+  /// No-ops after <see cref="FlushAsync"/> or <see cref="Dispose"/>.
   /// </summary>
   public async ValueTask Execute(TCmd command, Dispatch<TMsg> dispatch, CancellationToken ct)
   {
+    if (_flushed)
+    {
+      return;
+    }
+
     _timer.Stop();
 
     if (_pendingCts is not null)
@@ -74,10 +81,55 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
     _timer.Start();
   }
 
+  /// <summary>
+  /// Immediately execute any pending debounced command and stop the timer.
+  /// Call during graceful shutdown to ensure pending work completes before disposal.
+  /// After flushing, further <see cref="Execute"/> calls are rejected.
+  /// </summary>
+  public async ValueTask FlushAsync()
+  {
+    _timer.Stop();
+    _flushed = true;
+
+    if (_pendingCommand is null || _pendingDispatch is null || _pendingCts is null)
+    {
+      return;
+    }
+
+    TCmd cmd = _pendingCommand;
+    Dispatch<TMsg> dispatch = _pendingDispatch;
+    CancellationTokenSource cts = _pendingCts;
+
+    _pendingCommand = default;
+    _pendingDispatch = null;
+    _pendingCts = null;
+
+    if (!cts.Token.IsCancellationRequested)
+    {
+      try
+      {
+        await _inner(cmd, dispatch, cts.Token).ConfigureAwait(false);
+      }
+      catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
+      {
+        // Expected cancellation
+      }
+#pragma warning disable CA1031 // Runtime boundary: flush must route errors as typed messages via onError
+      catch (Exception ex)
+      {
+        dispatch(_onError(cmd, ex));
+      }
+#pragma warning restore CA1031
+    }
+
+    cts.Dispose();
+  }
+
   /// <inheritdoc />
   public void Dispose()
   {
     _timer.Stop();
+    _flushed = true;
     _pendingCts?.Cancel();
     _pendingCts?.Dispose();
     GC.SuppressFinalize(this);

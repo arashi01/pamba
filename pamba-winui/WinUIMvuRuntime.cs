@@ -92,6 +92,15 @@ public static class WinUIMvuRuntime
       return this;
     }
 
+    public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+        WithProjection(StateProjectionBase<TState> projection)
+    {
+      ArgumentNullException.ThrowIfNull(projection);
+      _onInit = projection.ProjectInitial;
+      _onStateChanged = projection.Project;
+      return this;
+    }
+
     public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize)
     {
       ArgumentOutOfRangeException.ThrowIfLessThan(maxSize, 1);
@@ -185,6 +194,10 @@ public interface IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
       WithProjection(
           Action<TState> onInit,
           Action<TState, TState> onStateChanged);
+
+  /// <summary>Provide a <see cref="StateProjectionBase{TState}"/> for segment-based projection.</summary>
+  public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+      WithProjection(StateProjectionBase<TState> projection);
 
   /// <summary>Set the maximum debug history size. Default is 1000. Only has effect in debug builds.</summary>
   public IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
