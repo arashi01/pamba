@@ -22,7 +22,7 @@ public abstract class StateProjectionBase<TState>
 
   /// <summary>
   /// Initialises the projection base. Subclasses register segments via
-  /// <see cref="Segment{TSegment}"/> in their constructor.
+  /// <see cref="Segment{TSegment}(Func{TState, TSegment}, Action{TSegment})"/> in their constructor.
   /// </summary>
   protected StateProjectionBase()
   {
@@ -57,6 +57,39 @@ public abstract class StateProjectionBase<TState>
   }
 
   /// <summary>
+  /// Register a transition-aware projection segment: a selector extracting a sub-state,
+  /// an action for initial projection, and an action receiving both old and new values on transitions.
+  /// Use this overload when the projection needs the previous value to determine transition
+  /// behaviour (e.g. animation direction, diff highlighting).
+  /// </summary>
+  /// <typeparam name="TSegment">The sub-state type. Must implement value equality.</typeparam>
+  /// <param name="selector">Extracts the sub-state from the full state.</param>
+  /// <param name="projectInitial">Sets UI from the initial value. Called once at startup.</param>
+  /// <param name="projectTransition">
+  /// Updates the UI when the sub-state changes. Receives the previous and current values.
+  /// Called on the UI thread.
+  /// </param>
+  protected void Segment<TSegment>(
+      Func<TState, TSegment> selector,
+      Action<TSegment> projectInitial,
+      Action<TSegment, TSegment> projectTransition)
+      where TSegment : IEquatable<TSegment>
+  {
+    _diffSegments.Add((oldState, newState) =>
+    {
+      TSegment oldSegment = selector(oldState);
+      TSegment newSegment = selector(newState);
+
+      if (!EqualityComparer<TSegment>.Default.Equals(oldSegment, newSegment))
+      {
+        projectTransition(oldSegment, newSegment);
+      }
+    });
+
+    _initSegments.Add(state => projectInitial(selector(state)));
+  }
+
+  /// <summary>
   /// Called on the UI thread after every state transition.
   /// Evaluates all registered segments and invokes those whose sub-state changed.
   /// </summary>
@@ -78,11 +111,10 @@ public abstract class StateProjectionBase<TState>
   /// <summary>
   /// Force-project all segments from a default/initial state.
   /// Called once during startup to set initial UI state.
-  /// The default implementation fires every registered segment projector with <paramref name="initialState"/>.
-  /// Override when startup projection requires logic beyond the registered segments.
+  /// Fires every registered segment projector with <paramref name="initialState"/>.
   /// </summary>
   /// <param name="initialState">The initial state to project.</param>
-  public virtual void ProjectInitial(TState initialState)
+  public void ProjectInitial(TState initialState)
   {
     foreach (Action<TState> segment in _initSegments)
     {

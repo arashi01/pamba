@@ -79,11 +79,11 @@ Init() -> (State, Cmd[])
 
 ## Packages
 
-| Package         | TFM               | Dependencies           | Purpose                                                               |
-| --------------- | ----------------- | ---------------------- | --------------------------------------------------------------------- |
-| `Pamba`         | `net10.0`         | None                   | Contracts, dispatch loop, command/subscription infrastructure         |
-| `Pamba.WinUI`   | `net10.0-windows` | `Pamba`, WindowsAppSDK | `DispatcherQueue`-based runtime, projection base, timer subscriptions |
-| `Pamba.Testing` | `net10.0`         | `Pamba`                | `MvuTestRunner`, `MvuScenario` - works with xUnit, NUnit, MSTest      |
+| Package         | TFM               | Dependencies           | Purpose                                                                                        |
+| --------------- | ----------------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `Pamba`         | `net10.0`         | None                   | Contracts, dispatch loop, command/subscription infrastructure                                  |
+| `Pamba.WinUI`   | `net10.0-windows` | `Pamba`, WindowsAppSDK | `DispatcherQueue`-based runtime, projection base, timer/event subscriptions, command debouncer |
+| `Pamba.Testing` | `net10.0`         | `Pamba`                | `MvuTestRunner`, `MvuScenario` - works with xUnit, NUnit, MSTest                               |
 
 ## Quick Start
 
@@ -140,7 +140,7 @@ _runtime = WinUIMvuRuntime
     .Create(Program, mainWindow.DispatcherQueue)
     .WithCommandExecutor(commandExecutor.Execute)
     .WithSubscriptionStarter(subscriptionStarter.Start)
-    .WithProjection(projection.ProjectInitial, projection.Project)
+    .WithProjection(projection)
     .Start();
 ```
 

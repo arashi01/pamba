@@ -201,7 +201,7 @@ using MvuRuntime<AppState, Msg, Cmd, Sub> runtime = MvuRuntimeBuilder
 ## Related Packages
 
 - **Pamba.WinUI** - WinUI 3 integration with `DispatcherQueue`, `StateProjectionBase`
-  for segment-based UI diffing, and timer subscription helpers.
+  for segment-based UI diffing, timer/event subscription helpers, and command debouncer.
 - **Pamba.Testing** - `MvuTestRunner.UpdateAndValidate` and `MvuScenario` for multi-step flow testing.
 
 ## Licence

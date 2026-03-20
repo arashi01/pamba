@@ -15,11 +15,13 @@ construction order at compile time. Projection is optional - call `.Start()` dir
 after `.WithSubscriptionStarter()` if you have no UI projection.
 
 ```csharp
+var projection = new AppProjection(mainWindow);
+
 MvuRuntime<AppState, Msg, Cmd, Sub> runtime = WinUIMvuRuntime
     .Create(program, mainWindow.DispatcherQueue)
     .WithCommandExecutor(commandExecutor.Execute)
     .WithSubscriptionStarter(subscriptionStarter.Start)
-    .WithProjection(projection.ProjectInitial, projection.Project)
+    .WithProjection(projection)
     .Start();
 ```
 
@@ -42,23 +44,24 @@ public sealed class AppProjection : StateProjectionBase<AppState>
 }
 ```
 
-All segments run against the initial state once at startup via `ProjectInitial`. Override
-`ProjectInitial` only if initial UI setup differs from the registered segment actions.
+All segments run against the initial state once at startup via `ProjectInitial`.
 
 The selector return type must implement `IEquatable<TSegment>`. C# records satisfy this automatically.
 
-Pass the projection to the builder:
+### Transition-aware segments
+
+When a segment needs the previous value to determine transition behaviour (e.g. animation
+direction), use the three-parameter overload:
 
 ```csharp
-var projection = new AppProjection(mainWindow);
-
-WinUIMvuRuntime
-    .Create(program, mainWindow.DispatcherQueue)
-    .WithCommandExecutor(executor)
-    .WithSubscriptionStarter(starter)
-    .WithProjection(projection.ProjectInitial, projection.Project)
-    .Start();
+Segment(
+    s => s.CurrentModule,
+    mod => SetModuleWithoutAnimation(mod),        // initial projection
+    (old, @new) => AnimateModuleSwitch(old, @new));  // transition projection
 ```
+
+`projectInitial` fires once at startup. `projectTransition` fires on each state change
+that alters the selected value, receiving both old and new values.
 
 ## Timer Subscriptions
 
@@ -88,6 +91,23 @@ IDisposable StartSubscription(Sub subscription, Dispatch<Msg> dispatch) =>
 Both return `IDisposable`. The runtime manages their lifecycle via subscription
 diffing - you do not need to dispose them manually.
 
+## Property Changed Subscription
+
+Bridges `INotifyPropertyChanged` events into the MVU loop. Use this to subscribe to
+external observable state such as Lugha's `LocaleHost` or system theme providers.
+
+```csharp
+Sub.LocaleChanged s => PropertyChangedSubscription.Start(
+    source: localeHost,
+    propertyName: "Current",
+    createMessage: () => new Msg.LocaleChanged(localeHost.Current.Culture.Name),
+    dispatch: dispatch,
+    dispatcherQueue: _dispatcherQueue),
+```
+
+The `dispatcherQueue` parameter ensures `createMessage` runs on the UI thread regardless
+of which thread raised the property change event.
+
 ## Command Debouncer
 
 Wraps a `CommandExecutor` to debounce high-frequency commands. Each invocation cancels the previous pending execution.
@@ -100,6 +120,14 @@ var debounced = new CommandDebouncer<Cmd, Msg>(
     onError: (cmd, ex) => new Msg.CommandFailed(cmd, ex.Message));
 
 // Pass debounced.Execute as the command executor
+```
+
+Call `FlushAsync` during graceful shutdown to execute any pending debounced command
+before disposing. Without this, the last debounced command is lost on disposal.
+
+```csharp
+await debounced.FlushAsync();
+debounced.Dispose();
 ```
 
 ## Localisation with Lugha
@@ -142,6 +170,9 @@ public sealed class AppProjection : StateProjectionBase<AppState>
 }
 ```
 
+For runtime locale changes originating externally (e.g. system language change), use
+`PropertyChangedSubscription` to bridge `LocaleHost.PropertyChanged` into the MVU loop.
+
 Wire everything at startup:
 
 ```csharp
@@ -153,7 +184,7 @@ _runtime = WinUIMvuRuntime
     .Create(program, mainWindow.DispatcherQueue)
     .WithCommandExecutor(executor)
     .WithSubscriptionStarter(starter)
-    .WithProjection(projection.ProjectInitial, projection.Project)
+    .WithProjection(projection)
     .Start();
 ```
 
