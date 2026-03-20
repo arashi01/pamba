@@ -60,7 +60,7 @@ public sealed class MvuRuntimeTests
         _ => (state, [])
       },
       Subscriptions = state => state.SubActive
-          ? [new TestSub(new SubscriptionKey("ticker"))]
+          ? [new TestSub(new SubscriptionKey { Value = "ticker" })]
           : [],
       OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
       OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString()),
@@ -353,7 +353,7 @@ public sealed class MvuRuntimeTests
         _ => (state, [])
       },
       Subscriptions = state => state.SubActive
-          ? [new TestSub(new SubscriptionKey("ticker"))]
+          ? [new TestSub(new SubscriptionKey { Value = "ticker" })]
           : [],
       OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
       OnRuntimeError = err => { runtimeErrors.Add(err.ToString()); return new TestMsg.RuntimeErrored(err.ToString()); }
@@ -418,4 +418,138 @@ public sealed class MvuRuntimeTests
     Assert.Equal(0, capturedInit.Count);
     Assert.False(capturedInit.SubActive);
   }
+
+  [Fact]
+  public void Validate_rejection_corrective_message_effects_are_preserved()
+  {
+    // C1/C2 regression: corrective message that changes state must not be overwritten
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
+    {
+      Init = () => (new TestState(0, false), []),
+      Update = (msg, state) => msg switch
+      {
+        TestMsg.SetValue v => (new TestState(v.Value, state.SubActive), []),
+        TestMsg.ValidationRejected => (new TestState(99, state.SubActive), []),
+        _ => (state, [])
+      },
+      Subscriptions = _ => [],
+      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
+      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString()),
+      Validate = state => state.Count < 0
+          ? new ValidationResult<TestState, TestMsg>.Invalid(new TestMsg.ValidationRejected())
+          : new ValidationResult<TestState, TestMsg>.Valid(state)
+    };
+
+    using var runtime = StartRuntime(program, NoOpExecutor, NoOpStarter);
+
+    // SetValue(-1) triggers validation rejection; corrective handler sets Count=99
+    runtime.Dispatch(new TestMsg.SetValue(-1));
+
+    Assert.Equal(99, runtime.State.Count);
+  }
+
+  [Fact]
+  public void Dispatch_rejected_does_not_corrupt_state()
+  {
+    // C3 regression: when enqueue returns false, state must not be mutated
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = CreateProgram();
+    List<string> runtimeErrors = [];
+
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> programWithTracking = new()
+    {
+      Init = program.Init,
+      Update = program.Update,
+      Subscriptions = program.Subscriptions,
+      OnCommandError = program.OnCommandError,
+      OnRuntimeError = err =>
+      {
+        runtimeErrors.Add(err.ToString());
+        return new TestMsg.RuntimeErrored(err.ToString());
+      },
+      Validate = program.Validate
+    };
+
+    // Use a dispatcher that can be switched to rejecting mode
+    bool rejectAll = false;
+    Func<Action, bool> rejectingDispatcher = action =>
+    {
+      if (rejectAll)
+      {
+        return false;
+      }
+
+      action();
+      return true;
+    };
+
+    using var runtime = MvuRuntimeBuilder
+        .Create(programWithTracking)
+        .WithCommandExecutor(NoOpExecutor)
+        .WithSubscriptionStarter(NoOpStarter)
+        .WithDispatcher(rejectingDispatcher)
+        .Start();
+
+    // Switch to rejecting mode after startup
+    rejectAll = true;
+    runtime.Dispatch(new TestMsg.Increment());
+
+    // OnRuntimeError should have been called with DispatchRejected
+    Assert.Single(runtimeErrors);
+  }
+
+  [Fact]
+  public void Subscription_parameter_change_restarts_subscription()
+  {
+    // C4 regression: same key, different data must restart subscription
+    Dictionary<string, List<int>> startedValues = [];
+
+    // Use a sub type that carries data beyond the key
+    MvuProgram<TestState, TestMsg, TestCmd, TestSubWithData> programWithData = new()
+    {
+      Init = () => (new TestState(0, false), []),
+      Update = (msg, state) => msg switch
+      {
+        TestMsg.Increment => (new TestState(state.Count + 1, true), []),
+        _ => (state, [])
+      },
+      Subscriptions = state => state.SubActive
+          ? [new TestSubWithData(new SubscriptionKey { Value = "ticker" }, state.Count)]
+          : [],
+      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
+      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString())
+    };
+
+    Func<Action, bool> dispatcher = action => { action(); return true; };
+
+    using var runtime = MvuRuntimeBuilder
+        .Create(programWithData)
+        .WithCommandExecutor(
+            (TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct) => ValueTask.CompletedTask)
+        .WithSubscriptionStarter(
+            (TestSubWithData sub, Dispatch<TestMsg> dispatch) =>
+            {
+              if (!startedValues.TryGetValue(sub.Key.Value, out var list))
+              {
+                list = [];
+                startedValues[sub.Key.Value] = list;
+              }
+
+              list.Add(sub.Interval);
+              return new TrackingDisposable();
+            })
+        .WithDispatcher(dispatcher)
+        .Start();
+
+    // First Increment: Count=1, starts subscription with Interval=1
+    runtime.Dispatch(new TestMsg.Increment());
+    Assert.Single(startedValues["ticker"]);
+    Assert.Equal(1, startedValues["ticker"][0]);
+
+    // Second Increment: Count=2, same key but different Interval=2 -> restart
+    runtime.Dispatch(new TestMsg.Increment());
+    Assert.Equal(2, startedValues["ticker"].Count);
+    Assert.Equal(2, startedValues["ticker"][1]);
+  }
+
+  private sealed record TestSubWithData(SubscriptionKey Key, int Interval) : ISubscription<TestMsg>;
 }

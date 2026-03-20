@@ -31,22 +31,7 @@ public static class TimerSubscription
     timer.IsRepeating = true;
     timer.Tick += (_, _) => dispatch(createMessage());
     timer.Start();
-    return new TimerHandle(timer);
-  }
-
-  private sealed class TimerHandle : IDisposable
-  {
-    private readonly DispatcherQueueTimer _timer;
-
-    internal TimerHandle(DispatcherQueueTimer timer)
-    {
-      _timer = timer;
-    }
-
-    public void Dispose()
-    {
-      _timer.Stop();
-    }
+    return new DispatcherTimerHandle(timer);
   }
 }
 
@@ -75,21 +60,6 @@ public static class DelayedSubscription
     timer.IsRepeating = false;
     timer.Tick += (_, _) => dispatch(createMessage());
     timer.Start();
-    return new TimerHandle(timer);
-  }
-
-  private sealed class TimerHandle : IDisposable
-  {
-    private readonly DispatcherQueueTimer _timer;
-
-    internal TimerHandle(DispatcherQueueTimer timer)
-    {
-      _timer = timer;
-    }
-
-    public void Dispose()
-    {
-      _timer.Stop();
-    }
+    return new DispatcherTimerHandle(timer);
   }
 }

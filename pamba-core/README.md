@@ -18,19 +18,20 @@ Requires .NET 10 / C# 14. Namespace: `Pamba`.
 
 ### Program
 
-An MVU program is five functions packaged as a single record:
+An MVU program is six functions packaged as a single record:
 
 ```csharp
 MvuProgram<TState, TMsg, TCmd, TSub>
 ```
 
-| Function         | Signature                                         | Purpose                                                                   |
-| ---------------- | ------------------------------------------------- | ------------------------------------------------------------------------- |
-| `Init`           | `() -> (TState, IReadOnlyList<TCmd>)`             | Initial state and startup commands                                        |
-| `Update`         | `(TMsg, TState) -> (TState, IReadOnlyList<TCmd>)` | State transition - no side effects, returns new state and commands        |
-| `Subscriptions`  | `(TState) -> IReadOnlyList<TSub>`                 | Declares which ongoing effects should be active for the current state     |
-| `OnCommandError` | `(TCmd, Exception) -> TMsg`                       | Routes command execution failures back into the loop as typed messages    |
-| `Validate`       | `(TState) -> TState` (optional)                   | Invariant check after every transition - runs in all build configurations |
+| Function         | Signature                                               | Purpose                                                                                                           |
+| ---------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `Init`           | `() -> (TState, ImmutableArray<TCmd>)`                  | Initial state and startup commands                                                                                |
+| `Update`         | `(TMsg, TState) -> (TState, ImmutableArray<TCmd>)`      | State transition - no side effects, returns new state and commands                                                |
+| `Subscriptions`  | `(TState) -> ImmutableArray<TSub>`                      | Declares which ongoing effects should be active for the current state                                             |
+| `OnCommandError` | `(TCmd, Exception) -> TMsg`                             | Routes command execution failures back into the loop as typed messages                                            |
+| `OnRuntimeError` | `(PambaError) -> TMsg`                                  | Routes library-originated errors (dispatch rejected, subscription start failed) into the loop                     |
+| `Validate`       | `(TState) -> ValidationResult<TState, TMsg>` (optional) | Invariant check after every transition - returns `Valid` or `Invalid` with corrective message. Runs in all builds |
 
 ### Type Parameters
 
@@ -50,10 +51,11 @@ and routed through `OnCommandError` back into the loop as a typed message.
 
 ### Subscriptions
 
-`Subscriptions` returns a list describing which ongoing effects (timers, listeners,
-connections) should be active for the current state. The runtime diffs this list against
-the previous one by `ISubscription<TMsg>.Key`: new keys are started via
-`SubscriptionStarter<TSub, TMsg>`; removed keys are disposed; unchanged keys continue running.
+`Subscriptions` returns the set of ongoing effects (timers, listeners,
+connections) that should be active for the current state. The runtime diffs this set against
+the previous one by `ISubscription<TMsg>.Key` and `IEquatable<TSub>.Equals`: new keys are started via
+`SubscriptionStarter<TSub, TMsg>`; removed keys are disposed; same key with changed data restarts;
+same key with equal data continues running.
 
 ## Contracts
 
@@ -61,8 +63,8 @@ the previous one by `ISubscription<TMsg>.Key`: new keys are started via
 // Dispatch a message into the loop. Thread-safe, FIFO ordering.
 public delegate void Dispatch<in TMsg>(TMsg message);
 
-// Execute a command. Returns a Task because commands typically perform I/O.
-public delegate Task CommandExecutor<in TCmd, TMsg>(
+// Execute a command. Returns ValueTask - zero-allocation for synchronous completions.
+public delegate ValueTask CommandExecutor<in TCmd, TMsg>(
     TCmd command, Dispatch<TMsg> dispatch, CancellationToken cancellationToken);
 
 // Start a subscription. Returns IDisposable - the runtime calls Dispose to cancel.
@@ -70,10 +72,16 @@ public delegate IDisposable SubscriptionStarter<in TSub, TMsg>(
     TSub subscription, Dispatch<TMsg> dispatch)
     where TSub : ISubscription<TMsg>;
 
+// Strongly-typed subscription key. Rejects null/empty values.
+public readonly record struct SubscriptionKey
+{
+    public required string Value { get; init; }
+}
+
 // Subscription identity for lifecycle diffing.
 public interface ISubscription<out TMsg>
 {
-    public string Key { get; }
+    public SubscriptionKey Key { get; }
 }
 ```
 
@@ -89,9 +97,9 @@ MvuRuntime<TState, TMsg, TCmd, TSub> runtime = MvuRuntimeBuilder
     .WithCommandExecutor(executor)
     .WithSubscriptionStarter(starter)
     .WithDispatcher(
-        enqueue: action => action(),            // synchronous (e.g. for tests)
-        onInit: state => { },                   // optional: called once with initial state
-        onStateChanged: (old, @new) => { })     // optional: called after every state change
+        action => { action(); return true; },   // synchronous (e.g. for tests)
+        state => { },                           // optional: called once with initial state
+        (old, @new) => { })                     // optional: called after every state change
     .Start();
 ```
 
@@ -109,14 +117,17 @@ For Avalonia: `Dispatcher.UIThread.Post`.
 
 ### Dispatch Mechanics
 
-1. `Dispatch(msg)` enqueues via the thread dispatcher. Thread-safe; returns immediately.
-2. On the dispatching thread, messages process sequentially (FIFO):
+1. `Dispatch(msg)` enqueues via the thread dispatcher. Thread-safe; returns immediately. If the queue has shut down,
+   `OnRuntimeError(DispatchRejected)` is invoked but the message is not processed (terminal signal).
+2. On the dispatching thread, messages process sequentially (FIFO). ProcessMessage is never re-entrant:
    - `Update(msg, state)` computes new state and commands.
-   - `Validate` runs if present.
-   - If state is unchanged (`oldState.Equals(newState)`): subscription diff and `onStateChanged` are skipped.
-   - Otherwise: subscriptions are diffed, `onStateChanged` is invoked.
+   - `Validate` runs if present. On `Invalid`, state reverts, commands are dropped, corrective message is captured for
+     deferred dispatch.
+   - State is written. If unchanged (`oldState.Equals(newState)`): subscription diff and `onStateChanged` are skipped.
+   - Otherwise: subscriptions are diffed (including parameter change detection), `onStateChanged` is invoked.
    - Commands execute asynchronously. Failures route via `OnCommandError`.
-3. Messages from commands or subscriptions re-enter at step 1.
+   - If a corrective message was captured, it is dispatched after state write and all side effects complete.
+3. Messages from commands, subscriptions, or corrective messages re-enter at step 1.
 
 ## Usage
 
@@ -136,7 +147,7 @@ public abstract record Cmd
   public sealed record Persist(int Value) : Cmd;
 }
 
-public sealed record Sub(string Key) : ISubscription<Msg>;
+public sealed record Sub(SubscriptionKey Key) : ISubscription<Msg>;
 ```
 
 ### Define Program
@@ -153,7 +164,8 @@ public static readonly MvuProgram<AppState, Msg, Cmd, Sub> Program = new()
     _ => (state, [])
   },
   Subscriptions = _ => [],
-  OnCommandError = (cmd, ex) => new Msg.SaveFailed(ex.Message)
+  OnCommandError = (cmd, ex) => new Msg.SaveFailed(ex.Message),
+  OnRuntimeError = err => new Msg.SaveFailed(err.ToString())
 };
 ```
 

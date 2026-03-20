@@ -104,7 +104,7 @@ public abstract record Cmd
   public sealed record Persist(int Value) : Cmd;
 }
 
-public sealed record Sub(string Key) : ISubscription<Msg>;
+public sealed record Sub(SubscriptionKey Key) : ISubscription<Msg>;
 ```
 
 ### 2. Define the program
@@ -123,9 +123,11 @@ public static readonly MvuProgram<AppState, Msg, Cmd, Sub> Program = new()
   },
   Subscriptions = _ => [],
   OnCommandError = (cmd, ex) => new Msg.SaveFailed(ex.Message),
+  OnRuntimeError = err => new Msg.SaveFailed(err.ToString()),
   Validate = state => state.Count >= 0
-      ? state
-      : throw new InvalidOperationException($"Count must be non-negative: {state.Count}")
+      ? new ValidationResult<AppState, Msg>.Valid(state)
+      : new ValidationResult<AppState, Msg>.Invalid(
+            new Msg.SaveFailed($"Count must be non-negative: {state.Count}"))
 };
 ```
 
@@ -148,7 +150,7 @@ _runtime = WinUIMvuRuntime
 [Fact]
 public void Increment_increases_count_and_persists()
 {
-  TransitionResult<AppState, Cmd, Sub> result =
+  TransitionResult<AppState, Msg, Cmd, Sub> result =
       MvuTestRunner.UpdateAndValidate(Program, new AppState(0), new Msg.Increment());
 
   Assert.Equal(1, result.State.Count);
@@ -200,6 +202,7 @@ my-app/
   as typed messages via `OnCommandError`.
   `OperationCanceledException` during disposal is silently absorbed.
 - **Subscription lifecycle correctness.** Started exactly once per unique key,
+  restarted when subscription data changes (same key, different parameters),
   cancelled exactly once when removed, all cancelled on dispose.
 - **Validation on every transition.** When `Validate` is provided,
   it runs in all build configurations - not only during testing.

@@ -15,7 +15,7 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   private readonly SubscriptionStarter<TSub, TMsg> _starter;
-  private readonly Dictionary<SubscriptionKey, IDisposable> _active;
+  private readonly Dictionary<SubscriptionKey, (TSub Subscription, IDisposable Handle)> _active;
   private readonly HashSet<SubscriptionKey> _currentKeys;
   private readonly List<SubscriptionKey> _removalBuffer;
 
@@ -29,7 +29,8 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
 
   /// <summary>
   /// Diff previous and current subscription sets.
-  /// Start new subscriptions, cancel removed ones, keep unchanged ones.
+  /// Same key + equal data = keep running. Same key + changed data = stop old, start new.
+  /// New key = start. Removed key = cancel.
   /// </summary>
   internal void Diff(ImmutableArray<TSub> current, Dispatch<TMsg> dispatch)
   {
@@ -37,11 +38,27 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
 
     foreach (TSub sub in current)
     {
-      _currentKeys.Add(sub.Key);
-
-      if (!_active.ContainsKey(sub.Key))
+#if DEBUG
+      if (!_currentKeys.Add(sub.Key))
       {
-        _active[sub.Key] = _starter(sub, dispatch);
+        System.Diagnostics.Debug.Fail(
+            $"Duplicate subscription key: '{sub.Key.Value}'. Each subscription must have a unique key.");
+      }
+#else
+      _currentKeys.Add(sub.Key);
+#endif
+
+      if (_active.TryGetValue(sub.Key, out var existing))
+      {
+        if (!existing.Subscription.Equals(sub))
+        {
+          DisposeHandle(existing.Handle);
+          _active[sub.Key] = (sub, _starter(sub, dispatch));
+        }
+      }
+      else
+      {
+        _active[sub.Key] = (sub, _starter(sub, dispatch));
       }
     }
 
@@ -57,13 +74,7 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
 
     foreach (SubscriptionKey key in _removalBuffer)
     {
-#pragma warning disable CA1031 // Subscription dispose must not block cleanup of remaining subscriptions
-      try
-      {
-        _active[key].Dispose();
-      }
-      catch { }
-#pragma warning restore CA1031
+      DisposeHandle(_active[key].Handle);
       _active.Remove(key);
     }
   }
@@ -71,17 +82,22 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
   /// <inheritdoc />
   public void Dispose()
   {
-    foreach (IDisposable handle in _active.Values)
+    foreach (var (_, handle) in _active.Values)
     {
-#pragma warning disable CA1031 // Subscription dispose must not block cleanup of remaining subscriptions
-      try
-      {
-        handle.Dispose();
-      }
-      catch { }
-#pragma warning restore CA1031
+      DisposeHandle(handle);
     }
 
     _active.Clear();
   }
+
+#pragma warning disable CA1031 // Subscription dispose must not block cleanup of remaining subscriptions
+  private static void DisposeHandle(IDisposable handle)
+  {
+    try
+    {
+      handle.Dispose();
+    }
+    catch { }
+  }
+#pragma warning restore CA1031
 }
