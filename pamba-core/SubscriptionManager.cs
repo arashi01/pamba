@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics;
 
 namespace Pamba;
 
@@ -97,7 +98,12 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
     {
       handle.Dispose();
     }
-    catch { }
+    catch (Exception ex)
+    {
+      Debug.Fail(
+          "Subscription Dispose threw an exception",
+          ex.ToString());
+    }
   }
 #pragma warning restore CA1031
 }

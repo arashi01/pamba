@@ -8,18 +8,18 @@ namespace Pamba;
 
 /// <summary>
 /// A complete MVU program definition.
-/// All four functions are pure. The runtime executes them.
+/// All functions are pure. The runtime executes them.
 /// See <see cref="MvuRuntime{TState, TMsg, TCmd, TSub}"/> for execution.
 /// </summary>
 /// <remarks>
-/// Record equality for this type is identity-based on delegate fields, not semantic.
-/// Do not rely on <see cref="object.Equals(object?)"/> for program equivalence.
+/// This is a configuration object, not a data aggregate. Its identity is referential.
+/// Equality comparison is not meaningful and is not provided.
 /// </remarks>
 /// <typeparam name="TState">Immutable application state. Must implement value equality.</typeparam>
 /// <typeparam name="TMsg">Message type - sealed record hierarchy.</typeparam>
 /// <typeparam name="TCmd">Command type - sealed record hierarchy describing effects.</typeparam>
 /// <typeparam name="TSub">Subscription type - sealed record hierarchy describing ongoing effects.</typeparam>
-public sealed record MvuProgram<TState, TMsg, TCmd, TSub>
+public sealed class MvuProgram<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
@@ -48,8 +48,8 @@ public sealed record MvuProgram<TState, TMsg, TCmd, TSub>
 
   /// <summary>
   /// Maps a library-originated <see cref="PambaError"/> to a message for the Update loop.
-  /// Ensures runtime errors (subscription start failures, dispatch rejections) are routed
-  /// as typed values into the Update loop rather than silently lost.
+  /// Ensures runtime errors (subscription start failures, dispatch rejections, error handler
+  /// failures) are routed as typed values into the Update loop rather than silently lost.
   /// </summary>
   public required Func<PambaError, TMsg> OnRuntimeError { get; init; }
 
@@ -60,11 +60,4 @@ public sealed record MvuProgram<TState, TMsg, TCmd, TSub>
   /// A total function - never throws.
   /// </summary>
   public Func<TState, ValidationResult<TState, TMsg>>? Validate { get; init; }
-
-  // NOTE: Record structural equality over Func<> fields is effectively identity-based because
-  // Func<> does not override Equals or GetHashCode (both delegate to RuntimeHelpers.GetHashCode
-  // via object). Two distinct MvuProgram instances sharing the same delegate references would
-  // compare as structurally equal; in practice this never occurs since each program is constructed
-  // with distinct lambda expressions. C# 14 does not permit user-defined Equals overrides on
-  // generic records without CS0111 conflicts with synthesised members.
 }

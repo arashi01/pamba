@@ -199,8 +199,11 @@ my-app/
 - **FIFO message ordering.** Messages are never processed concurrently.
   Every transition sees the result of all prior transitions.
 - **Command error routing.** Exceptions from command executors are caught and routed back
-  as typed messages via `OnCommandError`.
+  as typed messages via `OnCommandError`. If `OnCommandError` itself throws, the failure
+  is escalated via `OnRuntimeError` with `ErrorHandlerFailed`.
   `OperationCanceledException` during disposal is silently absorbed.
+- **Error handler safety.** If `OnRuntimeError` itself throws, the error is surfaced via
+  `Debug.Fail` (visible in debug builds) but the runtime never crashes.
 - **Subscription lifecycle correctness.** Started exactly once per unique key,
   restarted when subscription data changes (same key, different parameters),
   cancelled exactly once when removed, all cancelled on dispose.

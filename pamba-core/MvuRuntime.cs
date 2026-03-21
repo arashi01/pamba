@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -120,7 +121,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
       }
       catch (Exception ex)
       {
-        Dispatch(_program.OnRuntimeError(new PambaError.SubscriptionStartFailed(sub.Key, ex)));
+        SafeDispatchRuntimeError(new PambaError.SubscriptionStartFailed(sub.Key, ex));
         return NoopDisposable._instance;
       }
 #pragma warning restore CA1031
@@ -152,8 +153,8 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     if (!_enqueue(() => ProcessMessage(message)))
     {
       // Queue has shut down. Cannot safely mutate state - no thread context for ProcessMessage.
-      // Consumer's OnRuntimeError can observe/log but we do not process the resulting message.
-      _program.OnRuntimeError(new PambaError.DispatchRejected());
+      // Consumer's OnRuntimeError can observe/log but the resulting message is not dispatched.
+      NotifyRuntimeError(new PambaError.DispatchRejected());
     }
   }
 
@@ -252,8 +253,53 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     {
       if (!_disposed)
       {
-        Dispatch(_program.OnCommandError(cmd, ex));
+        SafeDispatchCommandError(cmd, ex);
       }
+    }
+  }
+#pragma warning restore CA1031
+
+#pragma warning disable CA1031 // Last-resort safety net: error handler failures must not crash the runtime
+  private void SafeDispatchCommandError(TCmd cmd, Exception ex)
+  {
+    try
+    {
+      Dispatch(_program.OnCommandError(cmd, ex));
+    }
+    catch (Exception handlerEx)
+    {
+      // OnCommandError threw — escalate to OnRuntimeError with ErrorHandlerFailed
+      SafeDispatchRuntimeError(
+          new PambaError.ErrorHandlerFailed($"OnCommandError for {cmd}", handlerEx));
+    }
+  }
+
+  private void SafeDispatchRuntimeError(PambaError error)
+  {
+    TMsg? msg = NotifyRuntimeError(error);
+    if (msg is not null)
+    {
+      Dispatch(msg);
+    }
+  }
+
+  /// <summary>
+  /// Calls OnRuntimeError safely, returning the message if successful, null if the handler threw.
+  /// Used directly (without dispatch) for DispatchRejected where the queue is unavailable.
+  /// </summary>
+  private TMsg? NotifyRuntimeError(PambaError error)
+  {
+    try
+    {
+      return _program.OnRuntimeError(error);
+    }
+    catch (Exception handlerEx)
+    {
+      // OnRuntimeError threw — no typed channel remains. Debug.Fail for dev visibility.
+      Debug.Fail(
+          "OnRuntimeError threw an exception",
+          $"Original error: {error}\nHandler exception: {handlerEx}");
+      return default;
     }
   }
 #pragma warning restore CA1031

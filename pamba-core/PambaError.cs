@@ -27,5 +27,14 @@ public abstract record PambaError
   /// <param name="Key">The subscription key whose starter threw.</param>
   /// <param name="Cause">The exception thrown by the starter.</param>
   public sealed record SubscriptionStartFailed(SubscriptionKey Key, Exception Cause) : PambaError;
+
+  /// <summary>
+  /// An error handler (<see cref="MvuProgram{TState,TMsg,TCmd,TSub}.OnCommandError"/> or
+  /// <see cref="MvuProgram{TState,TMsg,TCmd,TSub}.OnRuntimeError"/>) itself threw an exception.
+  /// Contains the original error that triggered the handler and the handler's exception.
+  /// </summary>
+  /// <param name="OriginalError">Description of the error the handler was processing.</param>
+  /// <param name="HandlerException">The exception thrown by the error handler.</param>
+  public sealed record ErrorHandlerFailed(string OriginalError, Exception HandlerException) : PambaError;
 #pragma warning restore CA1034
 }

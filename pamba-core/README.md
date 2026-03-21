@@ -18,7 +18,7 @@ Requires .NET 10 / C# 14. Namespace: `Pamba`.
 
 ### Program
 
-An MVU program is six functions packaged as a single record:
+An MVU program is six functions packaged as a single configuration object:
 
 ```csharp
 MvuProgram<TState, TMsg, TCmd, TSub>
@@ -30,7 +30,7 @@ MvuProgram<TState, TMsg, TCmd, TSub>
 | `Update`         | `(TMsg, TState) -> (TState, ImmutableArray<TCmd>)`      | State transition - no side effects, returns new state and commands                                                |
 | `Subscriptions`  | `(TState) -> ImmutableArray<TSub>`                      | Declares which ongoing effects should be active for the current state                                             |
 | `OnCommandError` | `(TCmd, Exception) -> TMsg`                             | Routes command execution failures back into the loop as typed messages                                            |
-| `OnRuntimeError` | `(PambaError) -> TMsg`                                  | Routes library-originated errors (dispatch rejected, subscription start failed) into the loop                     |
+| `OnRuntimeError` | `(PambaError) -> TMsg`                                  | Routes library errors (dispatch rejected, sub start failed, error handler failed) into the loop                   |
 | `Validate`       | `(TState) -> ValidationResult<TState, TMsg>` (optional) | Invariant check after every transition - returns `Valid` or `Invalid` with corrective message. Runs in all builds |
 
 ### Type Parameters

@@ -16,7 +16,7 @@ public static class WinUIMvuRuntime
   /// Begin constructing a WinUI-backed MVU runtime.
   /// Pre-wires the thread dispatcher to <paramref name="dispatcherQueue"/>.
   /// </summary>
-  public static IWinUIRuntimeWithProgram<TState, TMsg, TCmd, TSub>
+  public static IWinUINeedsExecutor<TState, TMsg, TCmd, TSub>
       Create<TState, TMsg, TCmd, TSub>(
           MvuProgram<TState, TMsg, TCmd, TSub> program,
           DispatcherQueue dispatcherQueue)
@@ -31,10 +31,10 @@ public static class WinUIMvuRuntime
   }
 
   private sealed class WinUIBuilder<TState, TMsg, TCmd, TSub>
-      : IWinUIRuntimeWithProgram<TState, TMsg, TCmd, TSub>,
-        IWinUIRuntimeWithExecutor<TState, TMsg, TCmd, TSub>,
-        IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>,
-        IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+      : IWinUINeedsExecutor<TState, TMsg, TCmd, TSub>,
+        IWinUINeedsSubscriptions<TState, TMsg, TCmd, TSub>,
+        IWinUIConfigurable<TState, TMsg, TCmd, TSub>,
+        IWinUIReady<TState, TMsg, TCmd, TSub>
       where TState : IEquatable<TState>
       where TMsg : notnull
       where TCmd : notnull
@@ -56,7 +56,7 @@ public static class WinUIMvuRuntime
       _dispatcherQueue = dispatcherQueue;
     }
 
-    public IWinUIRuntimeWithExecutor<TState, TMsg, TCmd, TSub>
+    public IWinUINeedsSubscriptions<TState, TMsg, TCmd, TSub>
         WithCommandExecutor(CommandExecutor<TCmd, TMsg> executor)
     {
       ArgumentNullException.ThrowIfNull(executor);
@@ -64,7 +64,7 @@ public static class WinUIMvuRuntime
       return this;
     }
 
-    public IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
+    public IWinUIConfigurable<TState, TMsg, TCmd, TSub>
         WithSubscriptionStarter(SubscriptionStarter<TSub, TMsg> starter)
     {
       ArgumentNullException.ThrowIfNull(starter);
@@ -72,7 +72,7 @@ public static class WinUIMvuRuntime
       return this;
     }
 
-    public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+    public IWinUIReady<TState, TMsg, TCmd, TSub>
         WithProjection(Action<TState, TState> onStateChanged)
     {
       ArgumentNullException.ThrowIfNull(onStateChanged);
@@ -80,7 +80,7 @@ public static class WinUIMvuRuntime
       return this;
     }
 
-    public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+    public IWinUIReady<TState, TMsg, TCmd, TSub>
         WithProjection(
             Action<TState> onInit,
             Action<TState, TState> onStateChanged)
@@ -92,7 +92,7 @@ public static class WinUIMvuRuntime
       return this;
     }
 
-    public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+    public IWinUIReady<TState, TMsg, TCmd, TSub>
         WithProjection(StateProjectionBase<TState> projection)
     {
       ArgumentNullException.ThrowIfNull(projection);
@@ -101,17 +101,17 @@ public static class WinUIMvuRuntime
       return this;
     }
 
-    public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize)
+    public IWinUIReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize)
     {
       ArgumentOutOfRangeException.ThrowIfLessThan(maxSize, 1);
       _maxHistorySize = maxSize;
       return this;
     }
 
-    // Explicit interface implementation: IWinUIRuntimeWithSubscriptions also exposes WithMaxHistorySize
+    // Explicit interface implementation: IWinUIConfigurable also exposes WithMaxHistorySize
     // for the no-projection Start() path.
-    IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
-        IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>.WithMaxHistorySize(int maxSize)
+    IWinUIConfigurable<TState, TMsg, TCmd, TSub>
+        IWinUIConfigurable<TState, TMsg, TCmd, TSub>.WithMaxHistorySize(int maxSize)
     {
       ArgumentOutOfRangeException.ThrowIfLessThan(maxSize, 1);
       _maxHistorySize = maxSize;
@@ -124,7 +124,7 @@ public static class WinUIMvuRuntime
       // The bool is propagated to MvuRuntime which routes false as PambaError.DispatchRejected.
       Func<Action, bool> enqueue = action => _dispatcherQueue.TryEnqueue(() => action());
 
-      IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub> withSubs = MvuRuntimeBuilder
+      IRuntimeNeedsDispatcher<TState, TMsg, TCmd, TSub> withSubs = MvuRuntimeBuilder
           .Create(_program)
           .WithCommandExecutor(_commandExecutor!)
           .WithSubscriptionStarter(_subscriptionStarter!);
@@ -154,67 +154,67 @@ public static class WinUIMvuRuntime
   }
 }
 
-/// <summary>Step 1: program and dispatcher provided, needs command executor.</summary>
-public interface IWinUIRuntimeWithProgram<TState, TMsg, TCmd, TSub>
+/// <summary>Needs a command executor. Provide via <c>WithCommandExecutor</c>.</summary>
+public interface IWinUINeedsExecutor<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   /// <summary>Provide the command executor (Shell concern).</summary>
-  public IWinUIRuntimeWithExecutor<TState, TMsg, TCmd, TSub>
+  public IWinUINeedsSubscriptions<TState, TMsg, TCmd, TSub>
       WithCommandExecutor(CommandExecutor<TCmd, TMsg> executor);
 }
 
-/// <summary>Step 2: executor provided, needs subscription starter.</summary>
-public interface IWinUIRuntimeWithExecutor<TState, TMsg, TCmd, TSub>
+/// <summary>Needs a subscription starter. Provide via <c>WithSubscriptionStarter</c>.</summary>
+public interface IWinUINeedsSubscriptions<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   /// <summary>Provide the subscription starter (Shell concern).</summary>
-  public IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
+  public IWinUIConfigurable<TState, TMsg, TCmd, TSub>
       WithSubscriptionStarter(SubscriptionStarter<TSub, TMsg> starter);
 }
 
-/// <summary>Step 3: subscriptions provided, dispatcher pre-wired. Optionally add projection.</summary>
-public interface IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
+/// <summary>Optionally add projection, history size, or call <c>Start</c> directly.</summary>
+public interface IWinUIConfigurable<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   /// <summary>Provide a state change callback for projection.</summary>
-  public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+  public IWinUIReady<TState, TMsg, TCmd, TSub>
       WithProjection(Action<TState, TState> onStateChanged);
 
   /// <summary>Provide init and state change callbacks for projection.</summary>
-  public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+  public IWinUIReady<TState, TMsg, TCmd, TSub>
       WithProjection(
           Action<TState> onInit,
           Action<TState, TState> onStateChanged);
 
   /// <summary>Provide a <see cref="StateProjectionBase{TState}"/> for segment-based projection.</summary>
-  public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+  public IWinUIReady<TState, TMsg, TCmd, TSub>
       WithProjection(StateProjectionBase<TState> projection);
 
   /// <summary>Set the maximum debug history size. Default is 1000. Only has effect in debug builds.</summary>
-  public IWinUIRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
+  public IWinUIConfigurable<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
 
   /// <summary>Start without projection.</summary>
   public MvuRuntime<TState, TMsg, TCmd, TSub> Start();
 }
 
-/// <summary>Step 4: projection provided, ready to start.</summary>
-public interface IWinUIRuntimeReady<TState, TMsg, TCmd, TSub>
+/// <summary>Projection provided. Call <c>Start</c> to begin the dispatch loop.</summary>
+public interface IWinUIReady<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   /// <summary>Set the maximum debug history size. Default is 1000. Only has effect in debug builds.</summary>
-  public IWinUIRuntimeReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
+  public IWinUIReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
 
   /// <summary>
   /// Start the runtime. Calls Init, projects initial state, and executes startup commands.
