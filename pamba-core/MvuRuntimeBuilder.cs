@@ -13,7 +13,7 @@ public static class MvuRuntimeBuilder
   /// <summary>
   /// Begin constructing a runtime for the given program.
   /// </summary>
-  public static IRuntimeWithProgram<TState, TMsg, TCmd, TSub>
+  public static IRuntimeNeedsExecutor<TState, TMsg, TCmd, TSub>
       Create<TState, TMsg, TCmd, TSub>(
           MvuProgram<TState, TMsg, TCmd, TSub> program)
       where TState : IEquatable<TState>
@@ -26,9 +26,9 @@ public static class MvuRuntimeBuilder
   }
 
   private sealed class Builder<TState, TMsg, TCmd, TSub>
-      : IRuntimeWithProgram<TState, TMsg, TCmd, TSub>,
-        IRuntimeWithExecutor<TState, TMsg, TCmd, TSub>,
-        IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>,
+      : IRuntimeNeedsExecutor<TState, TMsg, TCmd, TSub>,
+        IRuntimeNeedsSubscriptions<TState, TMsg, TCmd, TSub>,
+        IRuntimeNeedsDispatcher<TState, TMsg, TCmd, TSub>,
         IRuntimeReady<TState, TMsg, TCmd, TSub>
       where TState : IEquatable<TState>
       where TMsg : notnull
@@ -48,7 +48,7 @@ public static class MvuRuntimeBuilder
       _program = program;
     }
 
-    public IRuntimeWithExecutor<TState, TMsg, TCmd, TSub>
+    public IRuntimeNeedsSubscriptions<TState, TMsg, TCmd, TSub>
         WithCommandExecutor(CommandExecutor<TCmd, TMsg> executor)
     {
       ArgumentNullException.ThrowIfNull(executor);
@@ -56,7 +56,7 @@ public static class MvuRuntimeBuilder
       return this;
     }
 
-    public IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
+    public IRuntimeNeedsDispatcher<TState, TMsg, TCmd, TSub>
         WithSubscriptionStarter(SubscriptionStarter<TSub, TMsg> starter)
     {
       ArgumentNullException.ThrowIfNull(starter);
@@ -119,32 +119,32 @@ public static class MvuRuntimeBuilder
   }
 }
 
-/// <summary>Step 1: program provided, needs command executor.</summary>
-public interface IRuntimeWithProgram<TState, TMsg, TCmd, TSub>
+/// <summary>Needs a command executor. Provide via <c>WithCommandExecutor</c>.</summary>
+public interface IRuntimeNeedsExecutor<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   /// <summary>Provide the command executor (Shell concern).</summary>
-  public IRuntimeWithExecutor<TState, TMsg, TCmd, TSub>
+  public IRuntimeNeedsSubscriptions<TState, TMsg, TCmd, TSub>
       WithCommandExecutor(CommandExecutor<TCmd, TMsg> executor);
 }
 
-/// <summary>Step 2: executor provided, needs subscription starter.</summary>
-public interface IRuntimeWithExecutor<TState, TMsg, TCmd, TSub>
+/// <summary>Needs a subscription starter. Provide via <c>WithSubscriptionStarter</c>.</summary>
+public interface IRuntimeNeedsSubscriptions<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   /// <summary>Provide the subscription starter (Shell concern).</summary>
-  public IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
+  public IRuntimeNeedsDispatcher<TState, TMsg, TCmd, TSub>
       WithSubscriptionStarter(SubscriptionStarter<TSub, TMsg> starter);
 }
 
-/// <summary>Step 3: subscriptions provided, needs thread dispatcher.</summary>
-public interface IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
+/// <summary>Needs a thread dispatcher. Provide via <c>WithDispatcher</c>.</summary>
+public interface IRuntimeNeedsDispatcher<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
@@ -166,7 +166,7 @@ public interface IRuntimeWithSubscriptions<TState, TMsg, TCmd, TSub>
           Action<TState, TState> onStateChanged);
 }
 
-/// <summary>Step 4: all dependencies provided, ready to start.</summary>
+/// <summary>All dependencies provided. Call <c>Start</c> to begin the dispatch loop.</summary>
 public interface IRuntimeReady<TState, TMsg, TCmd, TSub>
     where TState : IEquatable<TState>
     where TMsg : notnull

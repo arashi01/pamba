@@ -77,7 +77,7 @@ public sealed class MvuRuntimeTests
   {
     Func<Action, bool> dispatcher = action => { action(); return true; };
 
-    IRuntimeWithSubscriptions<TestState, TestMsg, TestCmd, TestSub> withSubs = MvuRuntimeBuilder
+    IRuntimeNeedsDispatcher<TestState, TestMsg, TestCmd, TestSub> withSubs = MvuRuntimeBuilder
         .Create(program)
         .WithCommandExecutor(executor)
         .WithSubscriptionStarter(starter);
@@ -549,6 +549,90 @@ public sealed class MvuRuntimeTests
     runtime.Dispatch(new TestMsg.Increment());
     Assert.Equal(2, startedValues["ticker"].Count);
     Assert.Equal(2, startedValues["ticker"][1]);
+  }
+
+  [Fact]
+  public void OnCommandError_throwing_escalates_to_OnRuntimeError_with_ErrorHandlerFailed()
+  {
+    List<PambaError> runtimeErrors = [];
+
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
+    {
+      Init = () => (new TestState(0, false), [new TestCmd.Save(0)]),
+      Update = (msg, state) => msg switch
+      {
+        TestMsg.RuntimeErrored => (new TestState(-1, state.SubActive), []),
+        _ => (state, [])
+      },
+      Subscriptions = _ => [],
+      OnCommandError = (_, _) => throw new InvalidOperationException("Handler bug"),
+      OnRuntimeError = err =>
+      {
+        runtimeErrors.Add(err);
+        return new TestMsg.RuntimeErrored(err.ToString());
+      }
+    };
+
+    using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime = StartRuntime(
+        program,
+        (_, _, _) => ValueTask.FromException(new InvalidOperationException("Command failed")),
+        NoOpStarter);
+
+    // OnCommandError threw, so ErrorHandlerFailed should have been routed via OnRuntimeError
+    Assert.Single(runtimeErrors);
+    Assert.IsType<PambaError.ErrorHandlerFailed>(runtimeErrors[0]);
+    Assert.Equal(-1, runtime.State.Count);
+  }
+
+  [Fact]
+  public void OnRuntimeError_throwing_triggers_debug_fail_but_runtime_survives()
+  {
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
+    {
+      Init = () => (new TestState(0, true), []),
+      Update = (msg, state) => msg switch
+      {
+        _ => (state with { SubActive = false }, [])
+      },
+      Subscriptions = state => state.SubActive
+          ? [new TestSub(new SubscriptionKey { Value = "ticker" })]
+          : [],
+      OnCommandError = (_, _) => throw new InvalidOperationException("Handler bug"),
+      OnRuntimeError = _ => throw new InvalidOperationException("Runtime handler bug")
+    };
+
+    IDisposable ThrowingStarter(TestSub sub, Dispatch<TestMsg> dispatch) =>
+        throw new InvalidOperationException("Starter failed");
+
+    // Temporarily suppress Debug.Fail so it does not throw DebugAssertException in the test host
+    using var _ = new SuppressDebugAsserts();
+
+    using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime =
+        StartRuntime(program, NoOpExecutor, ThrowingStarter);
+
+    Assert.Equal(0, runtime.State.Count);
+  }
+
+  /// <summary>
+  /// Temporarily replaces trace listeners to suppress Debug.Fail
+  /// assertions during a test, restoring the original listeners on dispose.
+  /// </summary>
+  private sealed class SuppressDebugAsserts : IDisposable
+  {
+    private readonly System.Diagnostics.TraceListener[] _original;
+
+    public SuppressDebugAsserts()
+    {
+      _original = new System.Diagnostics.TraceListener[System.Diagnostics.Trace.Listeners.Count];
+      System.Diagnostics.Trace.Listeners.CopyTo(_original, 0);
+      System.Diagnostics.Trace.Listeners.Clear();
+    }
+
+    public void Dispose()
+    {
+      System.Diagnostics.Trace.Listeners.Clear();
+      System.Diagnostics.Trace.Listeners.AddRange(_original);
+    }
   }
 
   private sealed record TestSubWithData(SubscriptionKey Key, int Interval) : ISubscription<TestMsg>;

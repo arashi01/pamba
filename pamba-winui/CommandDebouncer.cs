@@ -2,6 +2,7 @@
 // See LICENSE in the project root for licence information.
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
@@ -20,6 +21,7 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
 {
   private readonly TimeSpan _delay;
   private readonly CommandExecutor<TCmd, TMsg> _inner;
+  private readonly DispatcherQueue _dispatcherQueue;
   private readonly DispatcherQueueTimer _timer;
   private readonly Func<TCmd, Exception, TMsg> _onError;
 
@@ -45,6 +47,7 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
     ArgumentNullException.ThrowIfNull(onError);
     _delay = delay;
     _inner = inner;
+    _dispatcherQueue = dispatcherQueue;
     _onError = onError;
     _timer = dispatcherQueue.CreateTimer();
     _timer.Interval = delay;
@@ -59,6 +62,10 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   /// </summary>
   public async ValueTask Execute(TCmd command, Dispatch<TMsg> dispatch, CancellationToken ct)
   {
+    Debug.Assert(
+        _dispatcherQueue.HasThreadAccess,
+        "CommandDebouncer.Execute must be called on the dispatcher thread.");
+
     if (_flushed)
     {
       return;
