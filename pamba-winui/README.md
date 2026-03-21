@@ -147,13 +147,12 @@ public sealed record AppState
 }
 ```
 
-Handle locale switching in `Update` using `LocaleRegistry<TLocale>`:
+Handle locale switching in `Update`. `Resolve` is total — returns the registry's default
+locale when no match is found:
 
 ```csharp
 Msg.LocaleSwitched m =>
-    registry.Resolve(m.LanguageTag) is { } locale
-        ? (state with { Locale = locale }, [])
-        : (state, []),
+    (state with { Locale = registry.Resolve(m.LanguageTag) }, []),
 ```
 
 Register a segment in your projection that calls `SetLocale` when the locale changes:
@@ -161,7 +160,7 @@ Register a segment in your projection that calls `SetLocale` when the locale cha
 ```csharp
 public sealed class AppProjection : StateProjectionBase<AppState>
 {
-    public AppProjection(MainWindow window, LocaleHost<IAppLocale> localeHost)
+    public AppProjection(MainWindow window, WinUILocaleHost<IAppLocale> localeHost)
     {
         Segment(s => s.Locale, locale => localeHost.SetLocale(locale));
         Segment(s => s.Auth, auth => ProjectAuth(window, auth));
@@ -176,8 +175,13 @@ For runtime locale changes originating externally (e.g. system language change),
 Wire everything at startup:
 
 ```csharp
-var registry = new LocaleRegistry<IAppLocale>([new EnGbLocale(), new ArSaLocale()]);
-var localeHost = new LocaleHost<IAppLocale>(new EnGbLocale(), mainWindow.DispatcherQueue);
+LocaleRegistry<IAppLocale> registry = LocaleRegistry<IAppLocale>
+    .Create(new EnGbLocale(), new ArSaLocale())
+    .Match(ok => ok, err => throw new InvalidOperationException($"Duplicate: {err.Tag}"));
+
+WinUILocaleHost<IAppLocale> localeHost =
+    LocaleHostFactory.Create(new EnGbLocale(), mainWindow.DispatcherQueue);
+
 var projection = new AppProjection(mainWindow, localeHost);
 
 _runtime = WinUIMvuRuntime
@@ -188,16 +192,18 @@ _runtime = WinUIMvuRuntime
     .Start();
 ```
 
-Bind text in XAML using Lugha's typed text scopes:
+Bind text and RTL flow direction in XAML:
 
 ```xml
-<TextBlock Text="{x:Bind localeHost.Current.Navigation.Dashboard, Mode=OneWay}" />
-<TextBlock Text="{x:Bind localeHost.Current.Connection.Connected(ViewModel.Host), Mode=OneWay}" />
+<Grid FlowDirection="{x:Bind localeHost.FlowDirection, Mode=OneWay}">
+  <TextBlock Text="{x:Bind localeHost.Current.Navigation.Dashboard, Mode=OneWay}" />
+  <TextBlock Text="{x:Bind localeHost.Current.Connection.Connected(ViewModel.Host), Mode=OneWay}" />
+</Grid>
 ```
 
-For RTL support and system language synchronisation, call `SystemLanguageSync.Apply` inside the
-locale segment action. See the [Lugha.WinUI documentation](https://github.com/arashi01/lugha) for
-details.
+For system language synchronisation (persistent `PrimaryLanguageOverride`), call
+`SystemLanguageSync.TryApply` inside the locale segment action. See the
+[Lugha.WinUI documentation](https://github.com/arashi01/lugha) for details.
 
 ## Related Packages
 
