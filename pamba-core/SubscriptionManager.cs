@@ -39,15 +39,10 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
 
     foreach (TSub sub in current)
     {
-#if DEBUG
       if (!_currentKeys.Add(sub.Key))
       {
-        System.Diagnostics.Debug.Fail(
-            $"Duplicate subscription key: '{sub.Key.Value}'. Each subscription must have a unique key.");
+        Trace.TraceError($"Duplicate subscription key: '{sub.Key.Value}'. Each subscription must have a unique key.");
       }
-#else
-      _currentKeys.Add(sub.Key);
-#endif
 
       if (_active.TryGetValue(sub.Key, out var existing))
       {
@@ -100,9 +95,7 @@ internal sealed class SubscriptionManager<TSub, TMsg> : IDisposable
     }
     catch (Exception ex)
     {
-      Debug.Fail(
-          "Subscription Dispose threw an exception",
-          ex.ToString());
+      Trace.TraceError($"Subscription Dispose threw an exception: {ex}");
     }
   }
 #pragma warning restore CA1031

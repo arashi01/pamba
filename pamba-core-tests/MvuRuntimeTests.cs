@@ -635,5 +635,42 @@ public sealed class MvuRuntimeTests
     }
   }
 
+  [Fact]
+  public void Projection_exception_routes_ProjectionFailed_via_OnRuntimeError()
+  {
+    List<PambaError> runtimeErrors = [];
+
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
+    {
+      Init = () => (new TestState(0, false), []),
+      Update = (msg, state) => msg switch
+      {
+        TestMsg.Increment => (new TestState(state.Count + 1, state.SubActive), []),
+        TestMsg.RuntimeErrored => (state, []),
+        _ => (state, [])
+      },
+      Subscriptions = _ => [],
+      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
+      OnRuntimeError = err =>
+      {
+        runtimeErrors.Add(err);
+        return new TestMsg.RuntimeErrored(err.ToString());
+      }
+    };
+
+    using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime = StartRuntime(
+        program,
+        NoOpExecutor,
+        NoOpStarter,
+        onStateChanged: (_, _) => throw new InvalidOperationException("Projection bug"));
+
+    runtime.Dispatch(new TestMsg.Increment());
+
+    // State transition should have completed despite projection failure
+    Assert.Equal(1, runtime.State.Count);
+    Assert.Single(runtimeErrors);
+    Assert.IsType<PambaError.ProjectionFailed>(runtimeErrors[0]);
+  }
+
   private sealed record TestSubWithData(SubscriptionKey Key, int Interval) : ISubscription<TestMsg>;
 }

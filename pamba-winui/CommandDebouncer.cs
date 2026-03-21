@@ -93,43 +93,11 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   /// Call during graceful shutdown to ensure pending work completes before disposal.
   /// After flushing, further <see cref="Execute"/> calls are rejected.
   /// </summary>
-  public async ValueTask FlushAsync()
+  public ValueTask FlushAsync()
   {
     _timer.Stop();
     _flushed = true;
-
-    if (_pendingCommand is null || _pendingDispatch is null || _pendingCts is null)
-    {
-      return;
-    }
-
-    TCmd cmd = _pendingCommand;
-    Dispatch<TMsg> dispatch = _pendingDispatch;
-    CancellationTokenSource cts = _pendingCts;
-
-    _pendingCommand = default;
-    _pendingDispatch = null;
-    _pendingCts = null;
-
-    if (!cts.Token.IsCancellationRequested)
-    {
-      try
-      {
-        await _inner(cmd, dispatch, cts.Token).ConfigureAwait(false);
-      }
-      catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
-      {
-        // Expected cancellation
-      }
-#pragma warning disable CA1031 // Runtime boundary: flush must route errors as typed messages via onError
-      catch (Exception ex)
-      {
-        dispatch(_onError(cmd, ex));
-      }
-#pragma warning restore CA1031
-    }
-
-    cts.Dispose();
+    return ExecutePendingAsync();
   }
 
   /// <inheritdoc />
@@ -145,12 +113,17 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   /// <remarks>
   /// <c>async void</c> is required here: <see cref="DispatcherQueueTimer.Tick"/> is
   /// <c>EventHandler&lt;object&gt;</c> and cannot return <see cref="Task"/> or <see cref="ValueTask"/>.
-  /// All exceptions from the inner executor are caught and routed via <c>_onError</c>.
+  /// All exceptions from the inner executor are caught and routed via <c>ExecutePendingAsync</c>.
   /// </remarks>
   private async void OnTimerTick(DispatcherQueueTimer sender, object args)
   {
     _timer.Stop();
+    await ExecutePendingAsync().ConfigureAwait(false);
+  }
 
+#pragma warning disable CA1031 // Runtime boundary: must catch all exceptions to route via onError or trace as last resort
+  private async ValueTask ExecutePendingAsync()
+  {
     if (_pendingCommand is null || _pendingDispatch is null || _pendingCts is null)
     {
       return;
@@ -174,14 +147,20 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
       {
         // Expected cancellation during debounce reset or disposal
       }
-#pragma warning disable CA1031 // Runtime boundary: async void event handler; exception routed as typed message via onError
       catch (Exception ex)
       {
-        dispatch(_onError(cmd, ex));
+        try
+        {
+          dispatch(_onError(cmd, ex));
+        }
+        catch (Exception handlerEx)
+        {
+          Trace.TraceError($"CommandDebouncer error handler threw: {handlerEx}");
+        }
       }
-#pragma warning restore CA1031
     }
 
     cts.Dispose();
   }
+#pragma warning restore CA1031
 }
