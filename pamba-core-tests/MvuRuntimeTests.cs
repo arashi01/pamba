@@ -585,7 +585,7 @@ public sealed class MvuRuntimeTests
   }
 
   [Fact]
-  public void OnRuntimeError_throwing_triggers_debug_fail_but_runtime_survives()
+  public void OnRuntimeError_throwing_traces_error_but_runtime_survives()
   {
     MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
     {
@@ -604,8 +604,8 @@ public sealed class MvuRuntimeTests
     IDisposable ThrowingStarter(TestSub sub, Dispatch<TestMsg> dispatch) =>
         throw new InvalidOperationException("Starter failed");
 
-    // Temporarily suppress Debug.Fail so it does not throw DebugAssertException in the test host
-    using var _ = new SuppressDebugAsserts();
+    // Suppress trace listeners so Trace.TraceError does not surface in the test host
+    using var _ = new SuppressTraceOutput();
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime =
         StartRuntime(program, NoOpExecutor, ThrowingStarter);
@@ -614,14 +614,14 @@ public sealed class MvuRuntimeTests
   }
 
   /// <summary>
-  /// Temporarily replaces trace listeners to suppress Debug.Fail
-  /// assertions during a test, restoring the original listeners on dispose.
+  /// Temporarily removes trace listeners to suppress Trace.TraceError
+  /// output during a test, restoring the original listeners on dispose.
   /// </summary>
-  private sealed class SuppressDebugAsserts : IDisposable
+  private sealed class SuppressTraceOutput : IDisposable
   {
     private readonly System.Diagnostics.TraceListener[] _original;
 
-    public SuppressDebugAsserts()
+    public SuppressTraceOutput()
     {
       _original = new System.Diagnostics.TraceListener[System.Diagnostics.Trace.Listeners.Count];
       System.Diagnostics.Trace.Listeners.CopyTo(_original, 0);
