@@ -24,14 +24,14 @@ An MVU program is six functions packaged as a single configuration object:
 MvuProgram<TState, TMsg, TCmd, TSub>
 ```
 
-| Function         | Signature                                               | Purpose                                                                                                           |
-| ---------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `Init`           | `() -> (TState, ImmutableArray<TCmd>)`                  | Initial state and startup commands                                                                                |
-| `Update`         | `(TMsg, TState) -> (TState, ImmutableArray<TCmd>)`      | State transition - no side effects, returns new state and commands                                                |
-| `Subscriptions`  | `(TState) -> ImmutableArray<TSub>`                      | Declares which ongoing effects should be active for the current state                                             |
-| `OnCommandError` | `(TCmd, Exception) -> TMsg`                             | Routes command execution failures back into the loop as typed messages                                            |
-| `OnRuntimeError` | `(PambaError) -> TMsg`                                  | Routes library errors (dispatch rejected, sub start failed, error handler failed) into the loop                   |
-| `Validate`       | `(TState) -> ValidationResult<TState, TMsg>` (optional) | Invariant check after every transition - returns `Valid` or `Invalid` with corrective message. Runs in all builds |
+| Function         | Signature                                               | Purpose                                                                                                            |
+| ---------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `Init`           | `() -> (TState, ImmutableArray<TCmd>)`                  | Initial state and startup commands                                                                                 |
+| `Update`         | `(TMsg, TState) -> (TState, ImmutableArray<TCmd>)`      | State transition - no side effects, returns new state and commands                                                 |
+| `Subscriptions`  | `(TState) -> ImmutableArray<TSub>`                      | Declares which ongoing effects should be active for the current state                                              |
+| `OnCommandError` | `(TCmd, Exception) -> TMsg`                             | Routes command execution failures back into the loop as typed messages                                             |
+| `OnRuntimeError` | `(PambaError) -> TMsg`                                  | Routes library errors (dispatch rejected, sub start failed, error handler failed, projection failed) into the loop |
+| `Validate`       | `(TState) -> ValidationResult<TState, TMsg>` (optional) | Invariant check after every transition - returns `Valid` or `Invalid` with corrective message. Runs in all builds  |
 
 ### Type Parameters
 

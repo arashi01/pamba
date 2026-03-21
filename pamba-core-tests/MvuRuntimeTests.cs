@@ -585,7 +585,7 @@ public sealed class MvuRuntimeTests
   }
 
   [Fact]
-  public void OnRuntimeError_throwing_triggers_debug_fail_but_runtime_survives()
+  public void OnRuntimeError_throwing_traces_error_but_runtime_survives()
   {
     MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
     {
@@ -604,8 +604,8 @@ public sealed class MvuRuntimeTests
     IDisposable ThrowingStarter(TestSub sub, Dispatch<TestMsg> dispatch) =>
         throw new InvalidOperationException("Starter failed");
 
-    // Temporarily suppress Debug.Fail so it does not throw DebugAssertException in the test host
-    using var _ = new SuppressDebugAsserts();
+    // Suppress trace listeners so Trace.TraceError does not surface in the test host
+    using var _ = new SuppressTraceOutput();
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime =
         StartRuntime(program, NoOpExecutor, ThrowingStarter);
@@ -614,14 +614,14 @@ public sealed class MvuRuntimeTests
   }
 
   /// <summary>
-  /// Temporarily replaces trace listeners to suppress Debug.Fail
-  /// assertions during a test, restoring the original listeners on dispose.
+  /// Temporarily removes trace listeners to suppress Trace.TraceError
+  /// output during a test, restoring the original listeners on dispose.
   /// </summary>
-  private sealed class SuppressDebugAsserts : IDisposable
+  private sealed class SuppressTraceOutput : IDisposable
   {
     private readonly System.Diagnostics.TraceListener[] _original;
 
-    public SuppressDebugAsserts()
+    public SuppressTraceOutput()
     {
       _original = new System.Diagnostics.TraceListener[System.Diagnostics.Trace.Listeners.Count];
       System.Diagnostics.Trace.Listeners.CopyTo(_original, 0);
@@ -633,6 +633,43 @@ public sealed class MvuRuntimeTests
       System.Diagnostics.Trace.Listeners.Clear();
       System.Diagnostics.Trace.Listeners.AddRange(_original);
     }
+  }
+
+  [Fact]
+  public void Projection_exception_routes_ProjectionFailed_via_OnRuntimeError()
+  {
+    List<PambaError> runtimeErrors = [];
+
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
+    {
+      Init = () => (new TestState(0, false), []),
+      Update = (msg, state) => msg switch
+      {
+        TestMsg.Increment => (new TestState(state.Count + 1, state.SubActive), []),
+        TestMsg.RuntimeErrored => (state, []),
+        _ => (state, [])
+      },
+      Subscriptions = _ => [],
+      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
+      OnRuntimeError = err =>
+      {
+        runtimeErrors.Add(err);
+        return new TestMsg.RuntimeErrored(err.ToString());
+      }
+    };
+
+    using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime = StartRuntime(
+        program,
+        NoOpExecutor,
+        NoOpStarter,
+        onStateChanged: (_, _) => throw new InvalidOperationException("Projection bug"));
+
+    runtime.Dispatch(new TestMsg.Increment());
+
+    // State transition should have completed despite projection failure
+    Assert.Equal(1, runtime.State.Count);
+    Assert.Single(runtimeErrors);
+    Assert.IsType<PambaError.ProjectionFailed>(runtimeErrors[0]);
   }
 
   private sealed record TestSubWithData(SubscriptionKey Key, int Interval) : ISubscription<TestMsg>;

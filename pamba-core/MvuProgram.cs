@@ -49,7 +49,7 @@ public sealed class MvuProgram<TState, TMsg, TCmd, TSub>
   /// <summary>
   /// Maps a library-originated <see cref="PambaError"/> to a message for the Update loop.
   /// Ensures runtime errors (subscription start failures, dispatch rejections, error handler
-  /// failures) are routed as typed values into the Update loop rather than silently lost.
+  /// failures, projection failures) are routed as typed values into the Update loop rather than silently lost.
   /// </summary>
   public required Func<PambaError, TMsg> OnRuntimeError { get; init; }
 

@@ -3,6 +3,7 @@
 
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
 using Microsoft.UI.Dispatching;
 
 namespace Pamba.WinUI;
@@ -30,7 +31,13 @@ public static class TimerSubscription
     var timer = dispatcherQueue.CreateTimer();
     timer.Interval = interval;
     timer.IsRepeating = true;
-    timer.Tick += (_, _) => dispatch(createMessage());
+    timer.Tick += (_, _) =>
+    {
+#pragma warning disable CA1031 // Framework boundary: tick handler exceptions must not crash the app
+      try { dispatch(createMessage()); }
+      catch (Exception ex) { Trace.TraceError($"Timer subscription tick failed: {ex}"); }
+#pragma warning restore CA1031
+    };
     timer.Start();
     return new DispatcherTimerHandle(timer);
   }
@@ -59,7 +66,13 @@ public static class DelayedSubscription
     var timer = dispatcherQueue.CreateTimer();
     timer.Interval = delay;
     timer.IsRepeating = false;
-    timer.Tick += (_, _) => dispatch(createMessage());
+    timer.Tick += (_, _) =>
+    {
+#pragma warning disable CA1031 // Framework boundary: tick handler exceptions must not crash the app
+      try { dispatch(createMessage()); }
+      catch (Exception ex) { Trace.TraceError($"Delayed subscription tick failed: {ex}"); }
+#pragma warning restore CA1031
+    };
     timer.Start();
     return new DispatcherTimerHandle(timer);
   }
@@ -105,7 +118,16 @@ public static class PropertyChangedSubscription
     {
       if (propertyName is null || e.PropertyName == propertyName)
       {
-        dispatcherQueue.TryEnqueue(() => dispatch(createMessage()));
+#pragma warning disable CA1031 // Framework boundary: dispatch lambda exceptions must not crash the app
+        if (!dispatcherQueue.TryEnqueue(() =>
+        {
+          try { dispatch(createMessage()); }
+          catch (Exception ex) { Trace.TraceError($"PropertyChanged subscription failed: {ex}"); }
+        }))
+        {
+          Trace.TraceWarning("PropertyChanged dispatch rejected: queue shut down.");
+        }
+#pragma warning restore CA1031
       }
     }
   }

@@ -202,8 +202,12 @@ my-app/
   as typed messages via `OnCommandError`. If `OnCommandError` itself throws, the failure
   is escalated via `OnRuntimeError` with `ErrorHandlerFailed`.
   `OperationCanceledException` during disposal is silently absorbed.
-- **Error handler safety.** If `OnRuntimeError` itself throws, the error is surfaced via
-  `Debug.Fail` (visible in debug builds) but the runtime never crashes.
+- **Projection safety.** If the `onStateChanged` projection callback throws, the exception
+  is caught and routed via `OnRuntimeError` with `ProjectionFailed`. The state transition
+  itself completes — only the UI projection failed.
+- **Error handler safety.** If `OnRuntimeError` itself throws, the error is traced via
+  `Trace.TraceError` (observable in all builds via standard .NET trace listeners) and
+  the runtime continues.
 - **Subscription lifecycle correctness.** Started exactly once per unique key,
   restarted when subscription data changes (same key, different parameters),
   cancelled exactly once when removed, all cancelled on dispose.

@@ -36,5 +36,12 @@ public abstract record PambaError
   /// <param name="OriginalError">Description of the error the handler was processing.</param>
   /// <param name="HandlerException">The exception thrown by the error handler.</param>
   public sealed record ErrorHandlerFailed(string OriginalError, Exception HandlerException) : PambaError;
+
+  /// <summary>
+  /// The state projection callback threw an exception during a state transition.
+  /// The state transition itself completed successfully; only the UI projection failed.
+  /// </summary>
+  /// <param name="Cause">The exception thrown by the projection callback.</param>
+  public sealed record ProjectionFailed(Exception Cause) : PambaError;
 #pragma warning restore CA1034
 }

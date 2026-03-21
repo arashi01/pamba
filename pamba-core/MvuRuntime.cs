@@ -208,7 +208,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     {
       newSubs = _program.Subscriptions(newState);
       _subscriptionManager.Diff(newSubs, Dispatch);
-      _onStateChanged?.Invoke(oldState, newState);
+      SafeInvokeProjection(oldState, newState);
     }
 
 #if DEBUG
@@ -274,6 +274,23 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
   }
 
+  private void SafeInvokeProjection(TState oldState, TState newState)
+  {
+    if (_onStateChanged is null)
+    {
+      return;
+    }
+
+    try
+    {
+      _onStateChanged(oldState, newState);
+    }
+    catch (Exception ex)
+    {
+      SafeDispatchRuntimeError(new PambaError.ProjectionFailed(ex));
+    }
+  }
+
   private void SafeDispatchRuntimeError(PambaError error)
   {
     TMsg? msg = NotifyRuntimeError(error);
@@ -295,10 +312,9 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
     catch (Exception handlerEx)
     {
-      // OnRuntimeError threw — no typed channel remains. Debug.Fail for dev visibility.
-      Debug.Fail(
-          "OnRuntimeError threw an exception",
-          $"Original error: {error}\nHandler exception: {handlerEx}");
+      // OnRuntimeError threw — no typed channel remains. Trace for production visibility.
+      Trace.TraceError(
+          $"OnRuntimeError threw an exception. Original error: {error}\nHandler exception: {handlerEx}");
       return default;
     }
   }
