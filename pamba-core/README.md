@@ -18,20 +18,19 @@ Requires .NET 10 / C# 14. Namespace: `Pamba`.
 
 ### Program
 
-An MVU program is six functions packaged as a single configuration object:
+An MVU program is five functions packaged as a single configuration object:
 
 ```csharp
 MvuProgram<TState, TMsg, TCmd, TSub>
 ```
 
-| Function         | Signature                                               | Purpose                                                                                                            |
-| ---------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `Init`           | `() -> (TState, ImmutableArray<TCmd>)`                  | Initial state and startup commands                                                                                 |
-| `Update`         | `(TMsg, TState) -> (TState, ImmutableArray<TCmd>)`      | State transition - no side effects, returns new state and commands                                                 |
-| `Subscriptions`  | `(TState) -> ImmutableArray<TSub>`                      | Declares which ongoing effects should be active for the current state                                              |
-| `OnCommandError` | `(TCmd, Exception) -> TMsg`                             | Routes command execution failures back into the loop as typed messages                                             |
-| `OnRuntimeError` | `(PambaError) -> TMsg`                                  | Routes library errors (dispatch rejected, sub start failed, error handler failed, projection failed) into the loop |
-| `Validate`       | `(TState) -> ValidationResult<TState, TMsg>` (optional) | Invariant check after every transition - returns `Valid` or `Invalid` with corrective message. Runs in all builds  |
+| Function         | Signature                                          | Purpose                                                                                                                             |
+| ---------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `Init`           | `() -> (TState, ImmutableArray<TCmd>)`             | Initial state and startup commands                                                                                                  |
+| `Update`         | `(TMsg, TState) -> (TState, ImmutableArray<TCmd>)` | State transition - no side effects, returns new state and commands                                                                  |
+| `Subscriptions`  | `(TState) -> ImmutableArray<TSub>`                 | Declares which ongoing effects should be active for the current state                                                               |
+| `OnRuntimeError` | `(PambaError) -> TMsg`                             | Routes library errors (dispatch rejected, sub start failed, error handler failed, projection failed, executor failed) into the loop |
+| `Validate`       | `(TState) -> ValidationResult<TState, TMsg>`       | Invariant check after every transition - returns `Valid` or `Invalid` with corrective message. Assign `AlwaysValid` when not needed |
 
 ### Type Parameters
 
@@ -46,8 +45,10 @@ MvuProgram<TState, TMsg, TCmd, TSub>
 
 `Update` does not execute side effects directly. Instead, it returns command values describing
 what should happen. The runtime executes them asynchronously via a
-`CommandExecutor<TCmd, TMsg>` you provide. If a command throws, the exception is caught
-and routed through `OnCommandError` back into the loop as a typed message.
+`CommandExecutor<TCmd, TMsg>` you provide. The executor returns `CommandResult<TMsg>.Ok` on
+success (zero allocation) or `CommandResult<TMsg>.Error(msg)` to dispatch a typed error message
+into the Update loop. Unexpected throws are caught and routed via `OnRuntimeError` as
+`PambaError.CommandExecutorFailed`.
 
 ### Subscriptions
 
@@ -63,19 +64,21 @@ same key with equal data continues running.
 // Dispatch a message into the loop. Thread-safe, FIFO ordering.
 public delegate void Dispatch<in TMsg>(TMsg message);
 
-// Execute a command. Returns ValueTask - zero-allocation for synchronous completions.
-public delegate ValueTask CommandExecutor<in TCmd, TMsg>(
+// Execute a command. Returns CommandResult<TMsg>: Ok (zero-allocation success) or Error(msg) to dispatch.
+public delegate ValueTask<CommandResult<TMsg>> CommandExecutor<in TCmd, TMsg>(
     TCmd command, Dispatch<TMsg> dispatch, CancellationToken cancellationToken);
 
-// Start a subscription. Returns IDisposable - the runtime calls Dispose to cancel.
-public delegate IDisposable SubscriptionStarter<in TSub, TMsg>(
+// Start a subscription. Returns IAsyncDisposable - the runtime calls DisposeAsync to cancel.
+public delegate IAsyncDisposable SubscriptionStarter<in TSub, TMsg>(
     TSub subscription, Dispatch<TMsg> dispatch)
     where TSub : ISubscription<TMsg>;
 
-// Strongly-typed subscription key. Rejects null/empty values.
+// Strongly-typed subscription key.
+// SubscriptionKey.From("key") - throws for null/empty (programming bug).
+// SubscriptionKey.TryFrom("key") - returns Result<SubscriptionKey, string> for runtime-provided keys.
 public readonly record struct SubscriptionKey
 {
-    public required string Value { get; init; }
+    public string Value { get; }
 }
 
 // Subscription identity for lifecycle diffing.
@@ -121,11 +124,12 @@ For Avalonia: `Dispatcher.UIThread.Post`.
    `OnRuntimeError(DispatchRejected)` is invoked but the message is not processed (terminal signal).
 2. On the dispatching thread, messages process sequentially (FIFO). ProcessMessage is never re-entrant:
    - `Update(msg, state)` computes new state and commands.
-   - `Validate` runs if present. On `Invalid`, state reverts, commands are dropped, corrective message is captured for
+   - `Validate` always runs. On `Invalid`, state reverts, commands are dropped, corrective message is captured for
      deferred dispatch.
    - State is written. If unchanged (`oldState.Equals(newState)`): subscription diff and `onStateChanged` are skipped.
    - Otherwise: subscriptions are diffed (including parameter change detection), `onStateChanged` is invoked.
-   - Commands execute asynchronously. Failures route via `OnCommandError`.
+   - Commands execute asynchronously. The executor returns `CommandResult<TMsg>`: `Ok` is silent; `Error(msg)`
+     dispatches `msg`.
    - If a corrective message was captured, it is dispatched after state write and all side effects complete.
 3. Messages from commands, subscriptions, or corrective messages re-enter at step 1.
 
@@ -164,7 +168,7 @@ public static readonly MvuProgram<AppState, Msg, Cmd, Sub> Program = new()
     _ => (state, [])
   },
   Subscriptions = _ => [],
-  OnCommandError = (cmd, ex) => new Msg.SaveFailed(ex.Message),
+  Validate = ValidationResult<AppState, Msg>.AlwaysValid,
   OnRuntimeError = err => new Msg.SaveFailed(err.ToString())
 };
 ```
@@ -184,7 +188,7 @@ runtime.Dispatch(new Msg.Increment());
 
 ## Disposal
 
-`MvuRuntime` implements `IDisposable`. Disposing cancels all active subscriptions,
+`MvuRuntime` implements both `IDisposable` and `IAsyncDisposable`. Disposing cancels all active subscriptions,
 cancels in-flight commands via `CancellationToken`, and causes subsequent
 `Dispatch` calls to no-op.
 

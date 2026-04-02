@@ -69,7 +69,7 @@ Pre-built helpers for timer-based subscriptions. Use them inside your
 `SubscriptionStarter` delegate to handle specific subscription types:
 
 ```csharp
-IDisposable StartSubscription(Sub subscription, Dispatch<Msg> dispatch) =>
+IAsyncDisposable StartSubscription(Sub subscription, Dispatch<Msg> dispatch) =>
     subscription switch
     {
       Sub.RefreshTimer t => TimerSubscription.Start(
@@ -88,7 +88,7 @@ IDisposable StartSubscription(Sub subscription, Dispatch<Msg> dispatch) =>
     };
 ```
 
-Both return `IDisposable`. The runtime manages their lifecycle via subscription
+Both return `IAsyncDisposable`. The runtime manages their lifecycle via subscription
 diffing - you do not need to dispose them manually.
 
 ## Property Changed Subscription
@@ -110,24 +110,27 @@ of which thread raised the property change event.
 
 ## Command Debouncer
 
-Wraps a `CommandExecutor` to debounce high-frequency commands. Each invocation cancels the previous pending execution.
+Wraps a `CommandExecutor` to debounce high-frequency commands. Each invocation
+cancels the previous pending execution. `Execute` returns `CommandResult<TMsg>.Ok`
+immediately (actual execution is deferred), making it directly usable as a
+`CommandExecutor<TCmd, TMsg>`:
 
 ```csharp
 var debounced = new CommandDebouncer<Cmd, Msg>(
     delay: TimeSpan.FromMilliseconds(300),
     inner: actualExecutor,
-    dispatcherQueue: dispatcherQueue,
-    onError: (cmd, ex) => new Msg.CommandFailed(cmd, ex.Message));
+    dispatcherQueue: dispatcherQueue);
 
-// Pass debounced.Execute as the command executor
+// debounced.Execute is a CommandExecutor<Cmd, Msg>
 ```
 
 Call `FlushAsync` during graceful shutdown to execute any pending debounced command
 before disposing. Without this, the last debounced command is lost on disposal.
+`CommandDebouncer` implements both `IDisposable` and `IAsyncDisposable`:
 
 ```csharp
 await debounced.FlushAsync();
-debounced.Dispose();
+await debounced.DisposeAsync();
 ```
 
 ## Localisation with Lugha

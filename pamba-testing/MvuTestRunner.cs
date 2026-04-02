@@ -14,7 +14,7 @@ namespace Pamba.Testing;
 public static class MvuTestRunner
 {
   /// <summary>
-  /// Call Update, then Validate (if present), then Subscriptions.
+  /// Call Update, then Validate, then Subscriptions.
   /// Returns all results for assertion including any corrective message produced by a rejecting validator.
   /// </summary>
   public static TransitionResult<TState, TMsg, TCmd, TSub>
@@ -31,19 +31,16 @@ public static class MvuTestRunner
     (TState newState, ImmutableArray<TCmd> cmds) = program.Update(message, currentState);
     TMsg? correctionMessage = default;
 
-    if (program.Validate is not null)
+    switch (program.Validate(newState))
     {
-      switch (program.Validate(newState))
-      {
-        case ValidationResult<TState, TMsg>.Valid v:
-          newState = v.State;
-          break;
-        case ValidationResult<TState, TMsg>.Invalid i:
-          newState = currentState;
-          cmds = ImmutableArray<TCmd>.Empty;
-          correctionMessage = i.Error;
-          break;
-      }
+      case ValidationResult<TState, TMsg>.Valid v:
+        newState = v.State;
+        break;
+      case ValidationResult<TState, TMsg>.Invalid i:
+        newState = currentState;
+        cmds = ImmutableArray<TCmd>.Empty;
+        correctionMessage = i.Error;
+        break;
     }
 
     ImmutableArray<TSub> subs = program.Subscriptions(newState);
@@ -51,7 +48,7 @@ public static class MvuTestRunner
   }
 
   /// <summary>
-  /// Call Init, then Validate (if present), then Subscriptions on the initial state.
+  /// Call Init, then Validate, then Subscriptions on the initial state.
   /// Returns all results for assertion.
   /// </summary>
   public static TransitionResult<TState, TMsg, TCmd, TSub>
@@ -66,18 +63,15 @@ public static class MvuTestRunner
     (TState initialState, ImmutableArray<TCmd> cmds) = program.Init();
     TMsg? correctionMessage = default;
 
-    if (program.Validate is not null)
+    switch (program.Validate(initialState))
     {
-      switch (program.Validate(initialState))
-      {
-        case ValidationResult<TState, TMsg>.Valid v:
-          initialState = v.State;
-          break;
-        case ValidationResult<TState, TMsg>.Invalid i:
-          cmds = ImmutableArray<TCmd>.Empty;
-          correctionMessage = i.Error;
-          break;
-      }
+      case ValidationResult<TState, TMsg>.Valid v:
+        initialState = v.State;
+        break;
+      case ValidationResult<TState, TMsg>.Invalid i:
+        cmds = ImmutableArray<TCmd>.Empty;
+        correctionMessage = i.Error;
+        break;
     }
 
     ImmutableArray<TSub> subs = program.Subscriptions(initialState);

@@ -11,56 +11,82 @@ namespace Pamba.WinUI;
 
 /// <summary>
 /// Debounces high-frequency command execution.
-/// Each new invocation cancels the previous pending execution.
-/// Uses <see cref="DispatcherQueueTimer"/> for UI-thread-safe debouncing.
+/// Each new invocation cancels the previous pending execution and resets the delay.
 /// </summary>
+/// <remarks>
+/// <para>
+/// Uses <see cref="System.TimeProvider"/>-based timer for reliable, testable debounce timing.
+/// The default constructor uses <see cref="System.TimeProvider.System"/>; pass a custom
+/// <see cref="System.TimeProvider"/> for tests.
+/// </para>
+/// <para>
+/// Timer callbacks are marshalled back to the <see cref="DispatcherQueue"/> supplied at
+/// construction, ensuring command execution and dispatch always occur on the UI thread.
+/// </para>
+/// <para>
+/// <see cref="Execute"/> returns <c>CommandResult&lt;TMsg&gt;.Ok</c> immediately (the actual
+/// execution is deferred by the debounce delay). This makes the method signature compatible
+/// with <see cref="CommandExecutor{TCmd, TMsg}"/> for direct use as a wrapping executor.
+/// </para>
+/// </remarks>
 /// <typeparam name="TCmd">Command type.</typeparam>
 /// <typeparam name="TMsg">Message type.</typeparam>
-public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
+public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable, IAsyncDisposable
     where TCmd : notnull
 {
   private readonly TimeSpan _delay;
   private readonly CommandExecutor<TCmd, TMsg> _inner;
   private readonly DispatcherQueue _dispatcherQueue;
-  private readonly DispatcherQueueTimer _timer;
-  private readonly Func<TCmd, Exception, TMsg> _onError;
+  private readonly TimeProvider _timeProvider;
 
+  private ITimer? _timer;
   private TCmd? _pendingCommand;
   private Dispatch<TMsg>? _pendingDispatch;
   private CancellationTokenSource? _pendingCts;
   private bool _flushed;
 
   /// <summary>
-  /// Create a debouncer wrapping an inner command executor.
+  /// Create a debouncer wrapping an inner command executor using the system clock.
   /// </summary>
   /// <param name="delay">Debounce delay. Each new command resets the timer.</param>
   /// <param name="inner">The actual command executor to invoke after the delay.</param>
-  /// <param name="dispatcherQueue">WinUI dispatcher queue for the timer.</param>
-  /// <param name="onError">Maps a failed command and its exception to a message for dispatch.</param>
+  /// <param name="dispatcherQueue">WinUI dispatcher queue for marshalling execution back to the UI thread.</param>
+  public CommandDebouncer(
+      TimeSpan delay,
+      CommandExecutor<TCmd, TMsg> inner,
+      DispatcherQueue dispatcherQueue)
+      : this(delay, inner, dispatcherQueue, TimeProvider.System) { }
+
+  /// <summary>
+  /// Create a debouncer wrapping an inner command executor using a custom <see cref="System.TimeProvider"/>.
+  /// </summary>
+  /// <param name="delay">Debounce delay. Each new command resets the timer.</param>
+  /// <param name="inner">The actual command executor to invoke after the delay.</param>
+  /// <param name="dispatcherQueue">WinUI dispatcher queue for marshalling execution back to the UI thread.</param>
+  /// <param name="timeProvider">Time provider for the debounce timer. Use a fake for tests.</param>
   public CommandDebouncer(
       TimeSpan delay,
       CommandExecutor<TCmd, TMsg> inner,
       DispatcherQueue dispatcherQueue,
-      Func<TCmd, Exception, TMsg> onError)
+      TimeProvider timeProvider)
   {
     ArgumentNullException.ThrowIfNull(dispatcherQueue);
-    ArgumentNullException.ThrowIfNull(onError);
+    ArgumentNullException.ThrowIfNull(timeProvider);
     _delay = delay;
     _inner = inner;
     _dispatcherQueue = dispatcherQueue;
-    _onError = onError;
-    _timer = dispatcherQueue.CreateTimer();
-    _timer.Interval = delay;
-    _timer.IsRepeating = false;
-    _timer.Tick += OnTimerTick;
+    _timeProvider = timeProvider;
   }
 
   /// <summary>
   /// Schedule a command for debounced execution.
-  /// Cancels any previously pending command.
+  /// Cancels any previously pending command and resets the timer.
   /// No-ops after <see cref="FlushAsync"/> or <see cref="Dispose"/>.
+  /// Returns <c>CommandResult&lt;TMsg&gt;.Ok</c> immediately; the actual execution is
+  /// deferred by the debounce delay. This signature is compatible with
+  /// <see cref="CommandExecutor{TCmd, TMsg}"/> for use as a wrapping executor.
   /// </summary>
-  public async ValueTask Execute(TCmd command, Dispatch<TMsg> dispatch, CancellationToken ct)
+  public async ValueTask<CommandResult<TMsg>> Execute(TCmd command, Dispatch<TMsg> dispatch, CancellationToken ct)
   {
     Debug.Assert(
         _dispatcherQueue.HasThreadAccess,
@@ -68,14 +94,15 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
 
     if (_flushed)
     {
-      return;
+      return CommandResult<TMsg>.Ok;
     }
 
-    _timer.Stop();
+    _timer?.Dispose();
+    _timer = null;
 
     if (_pendingCts is not null)
     {
-      // ConfigureAwait(true): continuation must return to UI thread for DispatcherQueueTimer access
+      // ConfigureAwait(true): continuation must return to UI thread
       await _pendingCts.CancelAsync().ConfigureAwait(true);
       _pendingCts.Dispose();
     }
@@ -84,8 +111,9 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
     _pendingDispatch = dispatch;
     _pendingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-    _timer.Interval = _delay;
-    _timer.Start();
+    _timer = _timeProvider.CreateTimer(OnTimerFired, null, _delay, Timeout.InfiniteTimeSpan);
+
+    return CommandResult<TMsg>.Ok;
   }
 
   /// <summary>
@@ -95,7 +123,8 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   /// </summary>
   public ValueTask FlushAsync()
   {
-    _timer.Stop();
+    _timer?.Dispose();
+    _timer = null;
     _flushed = true;
     return ExecutePendingAsync();
   }
@@ -103,25 +132,42 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
   /// <inheritdoc />
   public void Dispose()
   {
-    _timer.Stop();
+    _timer?.Dispose();
+    _timer = null;
     _flushed = true;
     _pendingCts?.Cancel();
     _pendingCts?.Dispose();
     GC.SuppressFinalize(this);
   }
 
-  /// <remarks>
-  /// <c>async void</c> is required here: <see cref="DispatcherQueueTimer.Tick"/> is
-  /// <c>EventHandler&lt;object&gt;</c> and cannot return <see cref="Task"/> or <see cref="ValueTask"/>.
-  /// All exceptions from the inner executor are caught and routed via <c>ExecutePendingAsync</c>.
-  /// </remarks>
-  private async void OnTimerTick(DispatcherQueueTimer sender, object args)
+  /// <inheritdoc />
+  public async ValueTask DisposeAsync()
   {
-    _timer.Stop();
-    await ExecutePendingAsync().ConfigureAwait(false);
+    _timer?.Dispose();
+    _timer = null;
+    _flushed = true;
+    if (_pendingCts is not null)
+    {
+      await _pendingCts.CancelAsync().ConfigureAwait(false);
+      _pendingCts.Dispose();
+    }
+
+    GC.SuppressFinalize(this);
   }
 
-#pragma warning disable CA1031 // Runtime boundary: must catch all exceptions to route via onError or trace as last resort
+  private void OnTimerFired(object? state)
+  {
+    if (!
+#pragma warning disable CA2012 // fire-and-forget ValueTask: dispatched onto the UI thread; result handled inside ExecutePendingAsync
+        _dispatcherQueue.TryEnqueue(() => _ = ExecutePendingAsync())
+#pragma warning restore CA2012
+        )
+    {
+      Trace.TraceWarning("CommandDebouncer: dispatcher queue unavailable; pending command dropped.");
+    }
+  }
+
+#pragma warning disable CA1031 // Runtime boundary: last-resort catch for unexpected throws from the inner executor
   private async ValueTask ExecutePendingAsync()
   {
     if (_pendingCommand is null || _pendingDispatch is null || _pendingCts is null)
@@ -141,7 +187,11 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
     {
       try
       {
-        await _inner(cmd, dispatch, cts.Token).ConfigureAwait(false);
+        CommandResult<TMsg> result = await _inner(cmd, dispatch, cts.Token).ConfigureAwait(false);
+        if (result.HasError && !_flushed)
+        {
+          dispatch(result.ErrorMessage!);
+        }
       }
       catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
       {
@@ -149,14 +199,9 @@ public sealed class CommandDebouncer<TCmd, TMsg> : IDisposable
       }
       catch (Exception ex)
       {
-        try
-        {
-          dispatch(_onError(cmd, ex));
-        }
-        catch (Exception handlerEx)
-        {
-          Trace.TraceError($"CommandDebouncer error handler threw: {handlerEx}");
-        }
+        Trace.TraceError(
+            $"CommandDebouncer: unexpected throw from executor ({cmd.GetType().Name}): " +
+            $"{ex.GetType().Name}: {ex.Message}");
       }
     }
 

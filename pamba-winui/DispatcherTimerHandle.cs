@@ -2,15 +2,20 @@
 // See LICENSE in the project root for licence information.
 
 using System;
+using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
 
 namespace Pamba.WinUI;
 
 /// <summary>
-/// Disposable handle that stops a <see cref="DispatcherQueueTimer"/> on disposal.
+/// Async-disposable handle that stops a <see cref="DispatcherQueueTimer"/> on disposal.
 /// Shared by <see cref="TimerSubscription"/> and <see cref="DelayedSubscription"/>.
 /// </summary>
-internal sealed class DispatcherTimerHandle(DispatcherQueueTimer timer) : IDisposable
+internal sealed class DispatcherTimerHandle(DispatcherQueueTimer timer) : IAsyncDisposable
 {
-  public void Dispose() => timer.Stop();
+  public ValueTask DisposeAsync()
+  {
+    timer.Stop();
+    return ValueTask.CompletedTask;
+  }
 }

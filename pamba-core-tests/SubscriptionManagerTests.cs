@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Pamba.Tests;
@@ -14,27 +15,27 @@ public sealed class SubscriptionManagerTests
 
   private sealed record TestSub(SubscriptionKey Key) : ISubscription<TestMsg>;
 
-  private sealed class TrackingDisposable : IDisposable
+  private sealed class TrackingAsyncDisposable : IAsyncDisposable
   {
     public bool IsDisposed { get; private set; }
-    public void Dispose() => IsDisposed = true;
+    public ValueTask DisposeAsync() { IsDisposed = true; return ValueTask.CompletedTask; }
   }
 
   [Fact]
-  public void Diff_starts_new_subscriptions()
+  public async Task Diff_starts_new_subscriptions()
   {
     List<string> started = [];
-    IDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
+    IAsyncDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
       started.Add(sub.Key.Value);
-      return new TrackingDisposable();
+      return new TrackingAsyncDisposable();
     }
 
-    using SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
+    await using var manager = new SubscriptionManager<TestSub, TestMsg>(Starter, _ => { });
     Dispatch<TestMsg> dispatch = _ => { };
 
     manager.Diff(
-        [new TestSub(new SubscriptionKey { Value = "timer-a" }), new TestSub(new SubscriptionKey { Value = "timer-b" })],
+        [new TestSub(SubscriptionKey.From("timer-a")), new TestSub(SubscriptionKey.From("timer-b"))],
         dispatch);
 
     Assert.Equal(2, started.Count);
@@ -43,69 +44,69 @@ public sealed class SubscriptionManagerTests
   }
 
   [Fact]
-  public void Diff_cancels_removed_subscriptions()
+  public async Task Diff_cancels_removed_subscriptions()
   {
-    Dictionary<string, TrackingDisposable> handles = [];
-    IDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
+    Dictionary<string, TrackingAsyncDisposable> handles = [];
+    IAsyncDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
-      TrackingDisposable handle = new();
+      TrackingAsyncDisposable handle = new();
       handles[sub.Key.Value] = handle;
       return handle;
     }
 
-    using SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
+    await using var manager = new SubscriptionManager<TestSub, TestMsg>(Starter, _ => { });
     Dispatch<TestMsg> dispatch = _ => { };
 
     manager.Diff(
-        [new TestSub(new SubscriptionKey { Value = "timer-a" }), new TestSub(new SubscriptionKey { Value = "timer-b" })],
+        [new TestSub(SubscriptionKey.From("timer-a")), new TestSub(SubscriptionKey.From("timer-b"))],
         dispatch);
     Assert.False(handles["timer-a"].IsDisposed);
     Assert.False(handles["timer-b"].IsDisposed);
 
     // Remove timer-b
-    manager.Diff([new TestSub(new SubscriptionKey { Value = "timer-a" })], dispatch);
+    manager.Diff([new TestSub(SubscriptionKey.From("timer-a"))], dispatch);
 
     Assert.False(handles["timer-a"].IsDisposed);
     Assert.True(handles["timer-b"].IsDisposed);
   }
 
   [Fact]
-  public void Diff_keeps_unchanged_subscriptions()
+  public async Task Diff_keeps_unchanged_subscriptions()
   {
     int startCount = 0;
-    IDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
+    IAsyncDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
       startCount++;
-      return new TrackingDisposable();
+      return new TrackingAsyncDisposable();
     }
 
-    using SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
+    await using var manager = new SubscriptionManager<TestSub, TestMsg>(Starter, _ => { });
     Dispatch<TestMsg> dispatch = _ => { };
 
-    manager.Diff([new TestSub(new SubscriptionKey { Value = "timer-a" })], dispatch);
+    manager.Diff([new TestSub(SubscriptionKey.From("timer-a"))], dispatch);
     Assert.Equal(1, startCount);
 
     // Same subscription, should not restart
-    manager.Diff([new TestSub(new SubscriptionKey { Value = "timer-a" })], dispatch);
+    manager.Diff([new TestSub(SubscriptionKey.From("timer-a"))], dispatch);
     Assert.Equal(1, startCount);
   }
 
   [Fact]
-  public void Diff_to_empty_cancels_all_subscriptions()
+  public async Task Diff_to_empty_cancels_all_subscriptions()
   {
-    Dictionary<string, TrackingDisposable> handles = [];
-    IDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
+    Dictionary<string, TrackingAsyncDisposable> handles = [];
+    IAsyncDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
-      TrackingDisposable handle = new();
+      TrackingAsyncDisposable handle = new();
       handles[sub.Key.Value] = handle;
       return handle;
     }
 
-    using SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
+    await using var manager = new SubscriptionManager<TestSub, TestMsg>(Starter, _ => { });
     Dispatch<TestMsg> dispatch = _ => { };
 
     manager.Diff(
-        [new TestSub(new SubscriptionKey { Value = "a" }), new TestSub(new SubscriptionKey { Value = "b" })],
+        [new TestSub(SubscriptionKey.From("a")), new TestSub(SubscriptionKey.From("b"))],
         dispatch);
     Assert.False(handles["a"].IsDisposed);
     Assert.False(handles["b"].IsDisposed);
@@ -116,60 +117,60 @@ public sealed class SubscriptionManagerTests
   }
 
   [Fact]
-  public void Dispose_cancels_all_active_subscriptions()
+  public async Task Dispose_cancels_all_active_subscriptions()
   {
-    Dictionary<string, TrackingDisposable> handles = [];
-    IDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
+    Dictionary<string, TrackingAsyncDisposable> handles = [];
+    IAsyncDisposable Starter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
-      TrackingDisposable handle = new();
+      TrackingAsyncDisposable handle = new();
       handles[sub.Key.Value] = handle;
       return handle;
     }
 
-    SubscriptionManager<TestSub, TestMsg> manager = new(Starter);
+    SubscriptionManager<TestSub, TestMsg> manager = new(Starter, _ => { });
     Dispatch<TestMsg> dispatch = _ => { };
 
     manager.Diff(
-        [new TestSub(new SubscriptionKey { Value = "a" }), new TestSub(new SubscriptionKey { Value = "b" }), new TestSub(new SubscriptionKey { Value = "c" })],
+        [new TestSub(SubscriptionKey.From("a")), new TestSub(SubscriptionKey.From("b")), new TestSub(SubscriptionKey.From("c"))],
         dispatch);
 
-    manager.Dispose();
+    await manager.DisposeAsync();
 
     Assert.All(handles.Values, h => Assert.True(h.IsDisposed));
   }
 
   [Fact]
-  public void Diff_restarts_subscription_when_data_changes()
+  public async Task Diff_restarts_subscription_when_data_changes()
   {
     // C4 regression: same key, different data must stop old and start new
     List<int> startedIntervals = [];
-    TrackingDisposable? latestHandle = null;
+    TrackingAsyncDisposable? latestHandle = null;
 
-    IDisposable Starter(TestSubWithData sub, Dispatch<TestMsg> dispatch)
+    IAsyncDisposable Starter(TestSubWithData sub, Dispatch<TestMsg> dispatch)
     {
       startedIntervals.Add(sub.Interval);
-      latestHandle = new TrackingDisposable();
+      latestHandle = new TrackingAsyncDisposable();
       return latestHandle;
     }
 
-    using SubscriptionManager<TestSubWithData, TestMsg> manager = new(Starter);
+    await using var manager = new SubscriptionManager<TestSubWithData, TestMsg>(Starter, _ => { });
     Dispatch<TestMsg> dispatch = _ => { };
 
     // Start with Interval=5
-    manager.Diff([new TestSubWithData(new SubscriptionKey { Value = "timer" }, 5)], dispatch);
+    manager.Diff([new TestSubWithData(SubscriptionKey.From("timer"), 5)], dispatch);
     Assert.Single(startedIntervals);
     Assert.Equal(5, startedIntervals[0]);
-    TrackingDisposable firstHandle = latestHandle!;
+    TrackingAsyncDisposable firstHandle = latestHandle!;
 
     // Same key, different Interval=10 -> should restart
-    manager.Diff([new TestSubWithData(new SubscriptionKey { Value = "timer" }, 10)], dispatch);
+    manager.Diff([new TestSubWithData(SubscriptionKey.From("timer"), 10)], dispatch);
     Assert.Equal(2, startedIntervals.Count);
     Assert.Equal(10, startedIntervals[1]);
     Assert.True(firstHandle.IsDisposed);
     Assert.False(latestHandle!.IsDisposed);
 
     // Same key, same Interval=10 -> should NOT restart
-    manager.Diff([new TestSubWithData(new SubscriptionKey { Value = "timer" }, 10)], dispatch);
+    manager.Diff([new TestSubWithData(SubscriptionKey.From("timer"), 10)], dispatch);
     Assert.Equal(2, startedIntervals.Count); // Still 2, not 3
   }
 

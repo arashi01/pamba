@@ -17,7 +17,7 @@ Requires: `Pamba`. Namespace: `Pamba.Testing`.
 
 ### UpdateAndValidate
 
-Calls `Update(msg, state)`, then `Validate` (if present), then
+Calls `Update(msg, state)`, then `Validate`, then
 `Subscriptions(newState)`. Returns a `TransitionResult` containing all outputs
 for assertion. When `Validate` returns `Invalid`, the state reverts, commands are
 dropped, and `CorrectionMessage` is set on the result. Does not throw.
@@ -34,7 +34,7 @@ Assert.Empty(result.Subscriptions);
 
 ### InitAndValidate
 
-Calls `Init()`, then `Validate` (if present), then `Subscriptions(initialState)`.
+Calls `Init()`, then `Validate`, then `Subscriptions(initialState)`.
 
 ```csharp
 TransitionResult<AppState, Msg, Cmd, Sub> result =
@@ -79,20 +79,20 @@ MvuScenario.For(program)
 
 ### API
 
-| Method                                       | Purpose                                                                   |
-| -------------------------------------------- | ------------------------------------------------------------------------- |
-| `MvuScenario.For(program)`                   | Create a runner. Calls `Init` to establish starting state.                |
-| `MvuScenario.For(program, assertInit)`       | Create a runner and assert on the Init result.                            |
-| `.Dispatch(msg)`                             | Advance state by one message.                                             |
-| `.Dispatch(msg, assert)`                     | Advance and assert on the `TransitionResult`.                             |
-| `.DispatchAll(msgs...)`                      | Advance by multiple messages in sequence.                                 |
-| `.DispatchWithCorrections(msg, maxDepth)`    | Advance and auto-process corrective messages from validation rejection.   |
-| `.DispatchWithCorrections(msg, assert, max)` | Same with assertion on first transition.                                  |
-| `.AssertState(assert)`                       | Assert on the current accumulated state.                                  |
-| `.AssertHistory(assert)`                     | Assert on the full transition history.                                    |
-| `.AssertLastTransition(assert)`              | Assert on the most recent transition.                                     |
-| `.State`                                     | Current state after all dispatched messages.                              |
-| `.History`                                   | Immutable array of `TransitionResult` entries, including `Init`.          |
+| Method                                       | Purpose                                                                       |
+| -------------------------------------------- | ----------------------------------------------------------------------------- |
+| `MvuScenario.For(program)`                   | Create a runner. Calls `Init` to establish starting state.                    |
+| `MvuScenario.For(program, assertInit)`       | Create a runner and assert on the Init result.                                |
+| `.Dispatch(msg)`                             | Advance state by one message.                                                 |
+| `.Dispatch(msg, assert)`                     | Advance and assert on the `TransitionResult`.                                 |
+| `.DispatchAll(msgs...)`                      | Advance by multiple messages in sequence (per-message validation, not batch). |
+| `.DispatchWithCorrections(msg, maxDepth)`    | Advance and auto-process corrective messages from validation rejection.       |
+| `.DispatchWithCorrections(msg, assert, max)` | Same with assertion on first transition.                                      |
+| `.AssertState(assert)`                       | Assert on the current accumulated state.                                      |
+| `.AssertHistory(assert)`                     | Assert on the full transition history.                                        |
+| `.AssertLastTransition(assert)`              | Assert on the most recent transition.                                         |
+| `.State`                                     | Current state after all dispatched messages.                                  |
+| `.History`                                   | Immutable array of `TransitionResult` entries, including `Init`.              |
 
 All methods return the runner for chaining. `History` includes the `Init` result
 at index 0, followed by one entry per `Dispatch` call.

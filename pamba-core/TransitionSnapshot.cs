@@ -6,14 +6,14 @@ using System.Collections.Immutable;
 namespace Pamba;
 
 /// <summary>
-/// Diagnostic record of a single state transition.
-/// Recorded by the runtime in debug builds.
+/// Point-in-time snapshot of a single state transition.
+/// Recorded by the runtime in debug builds for time-travel diagnostics.
 /// </summary>
 /// <typeparam name="TState">State type.</typeparam>
 /// <typeparam name="TMsg">Message type.</typeparam>
 /// <typeparam name="TCmd">Command type.</typeparam>
 /// <typeparam name="TSub">Subscription type.</typeparam>
-public sealed record TransitionRecord<TState, TMsg, TCmd, TSub>(
+public sealed record TransitionSnapshot<TState, TMsg, TCmd, TSub>(
     TMsg Message,
     TState StateBefore,
     TState StateAfter,
