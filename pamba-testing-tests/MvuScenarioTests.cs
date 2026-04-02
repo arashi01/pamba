@@ -32,10 +32,10 @@ public sealed class MvuScenarioTests
       _ => (state, [])
     },
     Subscriptions = state => state.IsRunning
-        ? [new TestSub(new SubscriptionKey { Value = "tick" })]
+        ? [new TestSub(SubscriptionKey.From("tick"))]
         : [],
-    OnCommandError = (_, ex) => throw new InvalidOperationException("Unexpected command error", ex),
-    OnRuntimeError = err => throw new InvalidOperationException($"Unexpected runtime error: {err}")
+    OnRuntimeError = err => throw new InvalidOperationException($"Unexpected runtime error: {err}"),
+    Validate = ValidationResult<TestState, TestMsg>.AlwaysValid
   };
 
   [Fact]
@@ -145,7 +145,6 @@ public sealed class MvuScenarioTests
         _ => (state, [])
       },
       Subscriptions = _ => [],
-      OnCommandError = (_, ex) => throw new InvalidOperationException("Unexpected", ex),
       OnRuntimeError = err => throw new InvalidOperationException($"Unexpected: {err}"),
       Validate = state => state.Count < 0
           ? new ValidationResult<TestState, TestMsg>.Invalid(new TestMsg.Stop())

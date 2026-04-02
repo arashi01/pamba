@@ -12,8 +12,7 @@ namespace Pamba;
 /// See <see cref="MvuRuntime{TState, TMsg, TCmd, TSub}"/> for execution.
 /// </summary>
 /// <remarks>
-/// This is a configuration object, not a data aggregate. Its identity is referential.
-/// Equality comparison is not meaningful and is not provided.
+/// A configuration object. Its identity is referential; equality is not meaningful.
 /// </remarks>
 /// <typeparam name="TState">Immutable application state. Must implement value equality.</typeparam>
 /// <typeparam name="TMsg">Message type - sealed record hierarchy.</typeparam>
@@ -41,23 +40,20 @@ public sealed class MvuProgram<TState, TMsg, TCmd, TSub>
   public required Func<TState, ImmutableArray<TSub>> Subscriptions { get; init; }
 
   /// <summary>
-  /// Maps a failed command and its exception to a message for the Update loop.
-  /// Ensures command execution failures are routed as typed values rather than silently lost.
-  /// </summary>
-  public required Func<TCmd, Exception, TMsg> OnCommandError { get; init; }
-
-  /// <summary>
   /// Maps a library-originated <see cref="PambaError"/> to a message for the Update loop.
   /// Ensures runtime errors (subscription start failures, dispatch rejections, error handler
-  /// failures, projection failures) are routed as typed values into the Update loop rather than silently lost.
+  /// failures, projection failures, unexpected command executor throws) are routed as typed
+  /// values into the Update loop rather than silently lost.
   /// </summary>
   public required Func<PambaError, TMsg> OnRuntimeError { get; init; }
 
   /// <summary>
-  /// Optional state validator invoked after every transition.
+  /// State validator invoked after every transition.
   /// Returns <see cref="ValidationResult{TState, TMsg}.Valid"/> with the accepted (optionally normalised) state,
   /// or <see cref="ValidationResult{TState, TMsg}.Invalid"/> with a corrective message to dispatch.
-  /// A total function - never throws.
+  /// A total function — never throws.
+  /// Assign <see cref="ValidationResultExtensions">ValidationResult&lt;TState, TMsg&gt;.AlwaysValid</see>
+  /// when structural validation is not needed.
   /// </summary>
-  public Func<TState, ValidationResult<TState, TMsg>>? Validate { get; init; }
+  public required Func<TState, ValidationResult<TState, TMsg>> Validate { get; init; }
 }

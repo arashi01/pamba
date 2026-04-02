@@ -19,7 +19,7 @@ namespace Pamba;
 /// <typeparam name="TMsg">Message type.</typeparam>
 /// <typeparam name="TCmd">Command type.</typeparam>
 /// <typeparam name="TSub">Subscription type.</typeparam>
-public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
+public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable, IAsyncDisposable
     where TState : IEquatable<TState>
     where TMsg : notnull
     where TCmd : notnull
@@ -35,11 +35,11 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 #if DEBUG
   private const int _defaultMaxHistorySize = 1000;
   private readonly int _maxHistorySize;
-  private readonly Queue<TransitionRecord<TState, TMsg, TCmd, TSub>> _messageHistory;
+  private readonly Queue<TransitionSnapshot<TState, TMsg, TCmd, TSub>> _messageHistory;
 #endif
 
   private TState _state;
-  private volatile bool _disposed;
+  private int _disposed; // 0 = alive, 1 = disposed (Interlocked for thread-safe check-and-set)
 
   internal MvuRuntime(
       MvuProgram<TState, TMsg, TCmd, TSub> program,
@@ -57,12 +57,12 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     _cts = new CancellationTokenSource();
 
     // Wrap the starter so that exceptions are routed via OnRuntimeError rather than propagating
-    _subscriptionManager = new SubscriptionManager<TSub, TMsg>(SafeStarter);
+    _subscriptionManager = new SubscriptionManager<TSub, TMsg>(SafeStarter, SafeDispatchRuntimeError);
 
 #if DEBUG
     // 0 means not configured (builder default); positive values are pre-validated by builder
     _maxHistorySize = maxHistorySize > 0 ? maxHistorySize : _defaultMaxHistorySize;
-    _messageHistory = new Queue<TransitionRecord<TState, TMsg, TCmd, TSub>>(_maxHistorySize);
+    _messageHistory = new Queue<TransitionSnapshot<TState, TMsg, TCmd, TSub>>(_maxHistorySize);
 #endif
 
     try
@@ -71,19 +71,16 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 
       bool hasCorrectiveMessage = false;
       TMsg correctiveMessage = default!;
-      if (program.Validate is not null)
+      switch (program.Validate(initialState))
       {
-        switch (program.Validate(initialState))
-        {
-          case ValidationResult<TState, TMsg>.Valid v:
-            initialState = v.State;
-            break;
-          case ValidationResult<TState, TMsg>.Invalid i:
-            startupCmds = ImmutableArray<TCmd>.Empty;
-            hasCorrectiveMessage = true;
-            correctiveMessage = i.Error;
-            break;
-        }
+        case ValidationResult<TState, TMsg>.Valid v:
+          initialState = v.State;
+          break;
+        case ValidationResult<TState, TMsg>.Invalid i:
+          startupCmds = ImmutableArray<TCmd>.Empty;
+          hasCorrectiveMessage = true;
+          correctiveMessage = i.Error;
+          break;
       }
 
       _state = initialState;
@@ -105,14 +102,16 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
     catch
     {
-      _subscriptionManager.Dispose();
+#pragma warning disable CA2012 // constructor cleanup: no ambient async context; fire-and-forget
+      _ = _subscriptionManager.DisposeAsync();
+#pragma warning restore CA2012
       _cts.Dispose();
       throw;
     }
 
     return;
 
-    IDisposable SafeStarter(TSub sub, Dispatch<TMsg> dispatch)
+    IAsyncDisposable SafeStarter(TSub sub, Dispatch<TMsg> dispatch)
     {
 #pragma warning disable CA1031 // Runtime boundary: subscription starter exceptions routed via OnRuntimeError
       try
@@ -121,31 +120,36 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
       }
       catch (Exception ex)
       {
-        SafeDispatchRuntimeError(new PambaError.SubscriptionStartFailed(sub.Key, ex));
-        return NoopDisposable._instance;
+        SafeDispatchRuntimeError(new PambaError.SubscriptionStartFailed(sub.Key, ex.GetType().Name, ex.Message));
+        return NoopAsyncDisposable._instance;
       }
 #pragma warning restore CA1031
     }
   }
 
-  /// <summary>Current application state. Read-only snapshot.</summary>
+  /// <summary>
+  /// Current application state. Read-only snapshot.
+  /// Read on the dispatcher thread for guaranteed consistency.
+  /// </summary>
   public TState State => _state;
 
   /// <summary>
   /// Message history (debug builds only). Null in release.
   /// Bounded to a configurable maximum size (default 1000).
   /// </summary>
-  public IReadOnlyCollection<TransitionRecord<TState, TMsg, TCmd, TSub>>? MessageHistory =>
+  public IReadOnlyCollection<TransitionSnapshot<TState, TMsg, TCmd, TSub>>? MessageHistory =>
 #if DEBUG
       _messageHistory;
 #else
       null;
 #endif
 
+  private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
   /// <summary>Dispatch a message into the loop. Thread-safe.</summary>
   public void Dispatch(TMsg message)
   {
-    if (_disposed)
+    if (IsDisposed)
     {
       return;
     }
@@ -158,24 +162,65 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
   }
 
-  /// <inheritdoc />
-  public void Dispose()
+  /// <summary>
+  /// Dispatch multiple messages as a single batch.
+  /// All messages are processed through Update sequentially (state flows through each).
+  /// Subscription diffing and projection run once after the last message, not per message.
+  /// Thread-safe.
+  /// </summary>
+  public void DispatchAll(params ReadOnlySpan<TMsg> messages)
   {
-    if (_disposed)
+    if (IsDisposed)
     {
       return;
     }
 
-    _disposed = true;
+    if (messages.IsEmpty)
+    {
+      return;
+    }
+
+    TMsg[] captured = messages.ToArray();
+
+    if (!_enqueue(() => ProcessBatch(captured)))
+    {
+      NotifyRuntimeError(new PambaError.DispatchRejected());
+    }
+  }
+
+  /// <inheritdoc />
+  public void Dispose()
+  {
+    if (Interlocked.Exchange(ref _disposed, 1) != 0)
+    {
+      return;
+    }
+
     _cts.Cancel();
-    _subscriptionManager.Dispose();
+#pragma warning disable CA2012 // synchronous Dispose cannot await; fire-and-forget is correct here per IDisposable pattern
+    _ = _subscriptionManager.DisposeAsync();
+#pragma warning restore CA2012
+    _cts.Dispose();
+    GC.SuppressFinalize(this);
+  }
+
+  /// <inheritdoc />
+  public async ValueTask DisposeAsync()
+  {
+    if (Interlocked.Exchange(ref _disposed, 1) != 0)
+    {
+      return;
+    }
+
+    await _cts.CancelAsync().ConfigureAwait(false);
+    await _subscriptionManager.DisposeAsync().ConfigureAwait(false);
     _cts.Dispose();
     GC.SuppressFinalize(this);
   }
 
   private void ProcessMessage(TMsg message)
   {
-    if (_disposed)
+    if (IsDisposed)
     {
       return;
     }
@@ -185,20 +230,17 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
 
     bool hasCorrective = false;
     TMsg corrective = default!;
-    if (_program.Validate is not null)
+    switch (_program.Validate(newState))
     {
-      switch (_program.Validate(newState))
-      {
-        case ValidationResult<TState, TMsg>.Valid v:
-          newState = v.State;
-          break;
-        case ValidationResult<TState, TMsg>.Invalid i:
-          newState = oldState;
-          cmds = ImmutableArray<TCmd>.Empty;
-          hasCorrective = true;
-          corrective = i.Error;
-          break;
-      }
+      case ValidationResult<TState, TMsg>.Valid v:
+        newState = v.State;
+        break;
+      case ValidationResult<TState, TMsg>.Invalid i:
+        newState = oldState;
+        cmds = ImmutableArray<TCmd>.Empty;
+        hasCorrective = true;
+        corrective = i.Error;
+        break;
     }
 
     _state = newState;
@@ -217,7 +259,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
       _messageHistory.Dequeue();
     }
 
-    _messageHistory.Enqueue(new TransitionRecord<TState, TMsg, TCmd, TSub>(
+    _messageHistory.Enqueue(new TransitionSnapshot<TState, TMsg, TCmd, TSub>(
         message, oldState, newState, cmds, newSubs));
 #endif
 
@@ -232,18 +274,92 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
   }
 
-#pragma warning disable CA2012 // ValueTask fire-and-forget: command execution is intentionally not awaited; all results dispatch back as messages via OnCommandError
+  private void ProcessBatch(TMsg[] messages)
+  {
+    if (IsDisposed)
+    {
+      return;
+    }
+
+    TState batchStartState = _state;
+    List<TCmd> pendingCmds = new(messages.Length);
+    List<TMsg> pendingCorrections = [];
+
+    foreach (TMsg msg in messages)
+    {
+      TState oldState = _state;
+      (TState newState, ImmutableArray<TCmd> cmds) = _program.Update(msg, oldState);
+
+      bool hasCorrective = false;
+      TMsg corrective = default!;
+      switch (_program.Validate(newState))
+      {
+        case ValidationResult<TState, TMsg>.Valid v:
+          newState = v.State;
+          pendingCmds.AddRange(cmds);
+          break;
+        case ValidationResult<TState, TMsg>.Invalid i:
+          newState = oldState;
+          hasCorrective = true;
+          corrective = i.Error;
+          break;
+      }
+
+      _state = newState;
+
+#if DEBUG
+      if (_messageHistory.Count >= _maxHistorySize)
+      {
+        _messageHistory.Dequeue();
+      }
+
+      // Subscriptions computed per-step for accurate history; diffing deferred to end of batch.
+      ImmutableArray<TSub> debugSubs = _program.Subscriptions(newState);
+      _messageHistory.Enqueue(new TransitionSnapshot<TState, TMsg, TCmd, TSub>(
+          msg, oldState, newState, hasCorrective ? ImmutableArray<TCmd>.Empty : cmds, debugSubs));
+#endif
+
+      if (hasCorrective)
+      {
+        pendingCorrections.Add(corrective);
+      }
+    }
+
+    // Single subscription diff + projection after entire batch
+    if (!batchStartState.Equals(_state))
+    {
+      ImmutableArray<TSub> finalSubs = _program.Subscriptions(_state);
+      _subscriptionManager.Diff(finalSubs, Dispatch);
+      SafeInvokeProjection(batchStartState, _state);
+    }
+
+    foreach (TCmd cmd in pendingCmds)
+    {
+      ExecuteCommand(cmd);
+    }
+
+    foreach (TMsg c in pendingCorrections)
+    {
+      Dispatch(c);
+    }
+  }
+
+#pragma warning disable CA2012 // ValueTask fire-and-forget: command execution is intentionally not awaited; all results dispatch back as messages via CommandResult or OnRuntimeError
   private void ExecuteCommand(TCmd cmd) =>
       _ = ExecuteCommandCore(cmd);
 #pragma warning restore CA2012
 
-#pragma warning disable CA1031 // Runtime boundary: must catch all consumer command executor exceptions to route as typed messages via OnCommandError
+#pragma warning disable CA1031 // Runtime boundary: last-resort catch for unexpected throws from command executors (programming bugs)
   private async ValueTask ExecuteCommandCore(TCmd cmd)
   {
     CancellationToken token = _cts.Token;
     try
     {
-      await _commandExecutor(cmd, Dispatch, token).ConfigureAwait(false);
+      CommandResult<TMsg> result = await _commandExecutor(cmd, Dispatch, token).ConfigureAwait(false);
+      if (result.HasError && !IsDisposed)
+      {
+        Dispatch(result.ErrorMessage!);
+      }
     }
     catch (OperationCanceledException) when (token.IsCancellationRequested)
     {
@@ -251,29 +367,16 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
     catch (Exception ex)
     {
-      if (!_disposed)
+      if (!IsDisposed)
       {
-        SafeDispatchCommandError(cmd, ex);
+        SafeDispatchRuntimeError(
+            new PambaError.CommandExecutorFailed(cmd.GetType().Name, ex.GetType().Name, ex.Message));
       }
     }
   }
 #pragma warning restore CA1031
 
-#pragma warning disable CA1031 // Last-resort safety net: error handler failures must not crash the runtime
-  private void SafeDispatchCommandError(TCmd cmd, Exception ex)
-  {
-    try
-    {
-      Dispatch(_program.OnCommandError(cmd, ex));
-    }
-    catch (Exception handlerEx)
-    {
-      // OnCommandError threw — escalate to OnRuntimeError with ErrorHandlerFailed
-      SafeDispatchRuntimeError(
-          new PambaError.ErrorHandlerFailed($"OnCommandError for {cmd}", handlerEx));
-    }
-  }
-
+#pragma warning disable CA1031 // Runtime boundary: projection failures must not propagate into the dispatch loop
   private void SafeInvokeProjection(TState oldState, TState newState)
   {
     if (_onStateChanged is null)
@@ -287,9 +390,10 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
     catch (Exception ex)
     {
-      SafeDispatchRuntimeError(new PambaError.ProjectionFailed(ex));
+      SafeDispatchRuntimeError(new PambaError.ProjectionFailed(ex.GetType().Name, ex.Message));
     }
   }
+#pragma warning restore CA1031
 
   private void SafeDispatchRuntimeError(PambaError error)
   {
@@ -300,10 +404,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
     }
   }
 
-  /// <summary>
-  /// Calls OnRuntimeError safely, returning the message if successful, null if the handler threw.
-  /// Used directly (without dispatch) for DispatchRejected where the queue is unavailable.
-  /// </summary>
+#pragma warning disable CA1031 // OnRuntimeError is a last-resort handler; if it throws there is no typed channel left
   private TMsg? NotifyRuntimeError(PambaError error)
   {
     try
@@ -320,10 +421,10 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable
   }
 #pragma warning restore CA1031
 
-  private sealed class NoopDisposable : IDisposable
+  private sealed class NoopAsyncDisposable : IAsyncDisposable
   {
-    internal static readonly NoopDisposable _instance = new();
+    internal static readonly NoopAsyncDisposable _instance = new();
 
-    public void Dispose() { }
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
   }
 }

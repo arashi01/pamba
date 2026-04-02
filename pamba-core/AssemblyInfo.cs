@@ -5,3 +5,5 @@ using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("Pamba.Tests")]
 [assembly: InternalsVisibleTo("Pamba.Testing")]
+[assembly: InternalsVisibleTo("Pamba.Testing.Tests")]
+[assembly: InternalsVisibleTo("Pamba.WinUI")]

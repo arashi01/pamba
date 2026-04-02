@@ -11,7 +11,8 @@
     <!-- CA1707: Identifiers should not contain underscores (test method names use them) -->
     <!-- CA1515: Public types in test assemblies — xUnit requires public test classes -->
     <!-- CA1812: Never-instantiated internal classes — test runner instantiates test classes externally -->
-    <NoWarn>$(NoWarn);CA1707;CA1515;CA1812</NoWarn>
+    <!-- CA2007: ConfigureAwait — tests run under a SynchronizationContext; await using cannot use ConfigureAwait -->
+    <NoWarn>$(NoWarn);CA1707;CA1515;CA1812;CA2007</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

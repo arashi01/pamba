@@ -36,14 +36,17 @@ public sealed class MvuRuntimeTests
 
   private sealed record TestSub(SubscriptionKey Key) : ISubscription<TestMsg>;
 
-  private sealed class TrackingDisposable : IDisposable
+  private sealed class TrackingAsyncDisposable : IAsyncDisposable
   {
     public bool IsDisposed { get; private set; }
-    public void Dispose() => IsDisposed = true;
+    public ValueTask DisposeAsync() { IsDisposed = true; return ValueTask.CompletedTask; }
   }
 
+  private static MvuProgram<TestState, TestMsg, TestCmd, TestSub> CreateProgram() =>
+      CreateProgram(state => new ValidationResult<TestState, TestMsg>.Valid(state));
+
   private static MvuProgram<TestState, TestMsg, TestCmd, TestSub> CreateProgram(
-      Func<TestState, ValidationResult<TestState, TestMsg>>? validate = null)
+      Func<TestState, ValidationResult<TestState, TestMsg>> validate)
   {
     return new MvuProgram<TestState, TestMsg, TestCmd, TestSub>
     {
@@ -60,9 +63,8 @@ public sealed class MvuRuntimeTests
         _ => (state, [])
       },
       Subscriptions = state => state.SubActive
-          ? [new TestSub(new SubscriptionKey { Value = "ticker" })]
+          ? [new TestSub(SubscriptionKey.From("ticker"))]
           : [],
-      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
       OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString()),
       Validate = validate
     };
@@ -95,20 +97,20 @@ public sealed class MvuRuntimeTests
     return withSubs.WithDispatcher(dispatcher).Start();
   }
 
-  private static ValueTask NoOpExecutor(TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct) =>
-      ValueTask.CompletedTask;
+  private static ValueTask<CommandResult<TestMsg>> NoOpExecutor(TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct) =>
+      ValueTask.FromResult(CommandResult<TestMsg>.Ok);
 
-  private static IDisposable NoOpStarter(TestSub sub, Dispatch<TestMsg> dispatch) =>
-      new TrackingDisposable();
+  private static IAsyncDisposable NoOpStarter(TestSub sub, Dispatch<TestMsg> dispatch) =>
+      new TrackingAsyncDisposable();
 
   [Fact]
   public void Init_sets_state_and_executes_startup_commands()
   {
     List<TestCmd> executedCmds = [];
-    ValueTask TrackingExecutor(TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct)
+    ValueTask<CommandResult<TestMsg>> TrackingExecutor(TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct)
     {
       executedCmds.Add(cmd);
-      return ValueTask.CompletedTask;
+      return ValueTask.FromResult(CommandResult<TestMsg>.Ok);
     }
 
     MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
@@ -116,8 +118,8 @@ public sealed class MvuRuntimeTests
       Init = () => (new TestState(42, false), [new TestCmd.Save(42)]),
       Update = (_, state) => (state, []),
       Subscriptions = _ => [],
-      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
-      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString())
+      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString()),
+      Validate = ValidationResult<TestState, TestMsg>.AlwaysValid
     };
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime =
@@ -143,10 +145,10 @@ public sealed class MvuRuntimeTests
   public void Dispatch_executes_returned_commands()
   {
     List<TestCmd> executedCmds = [];
-    ValueTask TrackingExecutor(TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct)
+    ValueTask<CommandResult<TestMsg>> TrackingExecutor(TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct)
     {
       executedCmds.Add(cmd);
-      return ValueTask.CompletedTask;
+      return ValueTask.FromResult(CommandResult<TestMsg>.Ok);
     }
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime =
@@ -180,7 +182,7 @@ public sealed class MvuRuntimeTests
   public void Validate_is_called_on_init_and_every_transition()
   {
     int validateCallCount = 0;
-    MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = CreateProgram(validate: state =>
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = CreateProgram(state =>
     {
       validateCallCount++;
       return new ValidationResult<TestState, TestMsg>.Valid(state);
@@ -200,7 +202,7 @@ public sealed class MvuRuntimeTests
   public void Validate_returns_Invalid_reverts_state_and_dispatches_corrective_message()
   {
     MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = CreateProgram(
-        validate: state => state.Count < 0
+        state => state.Count < 0
             ? new ValidationResult<TestState, TestMsg>.Invalid(new TestMsg.ValidationRejected())
             : new ValidationResult<TestState, TestMsg>.Valid(state));
 
@@ -217,10 +219,10 @@ public sealed class MvuRuntimeTests
   public void Dispatch_starts_subscriptions_when_state_activates_them()
   {
     List<string> startedKeys = [];
-    IDisposable TrackingStarter(TestSub sub, Dispatch<TestMsg> dispatch)
+    IAsyncDisposable TrackingStarter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
       startedKeys.Add(sub.Key.Value);
-      return new TrackingDisposable();
+      return new TrackingAsyncDisposable();
     }
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime =
@@ -237,10 +239,10 @@ public sealed class MvuRuntimeTests
   [Fact]
   public void Dispatch_cancels_subscriptions_when_state_deactivates_them()
   {
-    Dictionary<string, TrackingDisposable> handles = [];
-    IDisposable TrackingStarter(TestSub sub, Dispatch<TestMsg> dispatch)
+    Dictionary<string, TrackingAsyncDisposable> handles = [];
+    IAsyncDisposable TrackingStarter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
-      TrackingDisposable handle = new();
+      TrackingAsyncDisposable handle = new();
       handles[sub.Key.Value] = handle;
       return handle;
     }
@@ -258,14 +260,14 @@ public sealed class MvuRuntimeTests
   [Fact]
   public void Command_executor_can_dispatch_messages_back_into_loop()
   {
-    ValueTask DispatchingExecutor(TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct)
+    ValueTask<CommandResult<TestMsg>> DispatchingExecutor(TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct)
     {
       if (cmd is TestCmd.Save s)
       {
         dispatch(new TestMsg.SetValue(s.Value * 10));
       }
 
-      return ValueTask.CompletedTask;
+      return ValueTask.FromResult(CommandResult<TestMsg>.Ok);
     }
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime =
@@ -297,10 +299,10 @@ public sealed class MvuRuntimeTests
   [Fact]
   public void Dispose_cancels_all_active_subscriptions()
   {
-    Dictionary<string, TrackingDisposable> handles = [];
-    IDisposable TrackingStarter(TestSub sub, Dispatch<TestMsg> dispatch)
+    Dictionary<string, TrackingAsyncDisposable> handles = [];
+    IAsyncDisposable TrackingStarter(TestSub sub, Dispatch<TestMsg> dispatch)
     {
-      TrackingDisposable handle = new();
+      TrackingAsyncDisposable handle = new();
       handles[sub.Key.Value] = handle;
       return handle;
     }
@@ -316,7 +318,7 @@ public sealed class MvuRuntimeTests
   }
 
   [Fact]
-  public void Command_error_is_dispatched_as_message()
+  public void Command_error_result_dispatches_error_message()
   {
     MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
     {
@@ -327,13 +329,13 @@ public sealed class MvuRuntimeTests
         _ => (state, [])
       },
       Subscriptions = _ => [],
-      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
-      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString())
+      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString()),
+      Validate = ValidationResult<TestState, TestMsg>.AlwaysValid
     };
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime = StartRuntime(
         program,
-        (_, _, _) => ValueTask.FromException(new InvalidOperationException("DB connection failed")),
+        (_, _, _) => ValueTask.FromResult(CommandResult<TestMsg>.Error(new TestMsg.CommandErrored("DB failed"))),
         NoOpStarter);
 
     Assert.Equal(-1, runtime.State.Count);
@@ -353,13 +355,13 @@ public sealed class MvuRuntimeTests
         _ => (state, [])
       },
       Subscriptions = state => state.SubActive
-          ? [new TestSub(new SubscriptionKey { Value = "ticker" })]
+          ? [new TestSub(SubscriptionKey.From("ticker"))]
           : [],
-      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
-      OnRuntimeError = err => { runtimeErrors.Add(err.ToString()); return new TestMsg.RuntimeErrored(err.ToString()); }
+      OnRuntimeError = err => { runtimeErrors.Add(err.ToString()); return new TestMsg.RuntimeErrored(err.ToString()); },
+      Validate = ValidationResult<TestState, TestMsg>.AlwaysValid
     };
 
-    IDisposable ThrowingStarter(TestSub sub, Dispatch<TestMsg> dispatch) =>
+    IAsyncDisposable ThrowingStarter(TestSub sub, Dispatch<TestMsg> dispatch) =>
         throw new InvalidOperationException("Timer init failed");
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime =
@@ -384,8 +386,8 @@ public sealed class MvuRuntimeTests
         subscriptionsCalled++;
         return [];
       },
-      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
-      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString())
+      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString()),
+      Validate = ValidationResult<TestState, TestMsg>.AlwaysValid
     };
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime = StartRuntime(
@@ -433,7 +435,6 @@ public sealed class MvuRuntimeTests
         _ => (state, [])
       },
       Subscriptions = _ => [],
-      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
       OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString()),
       Validate = state => state.Count < 0
           ? new ValidationResult<TestState, TestMsg>.Invalid(new TestMsg.ValidationRejected())
@@ -460,7 +461,6 @@ public sealed class MvuRuntimeTests
       Init = program.Init,
       Update = program.Update,
       Subscriptions = program.Subscriptions,
-      OnCommandError = program.OnCommandError,
       OnRuntimeError = err =>
       {
         runtimeErrors.Add(err.ToString());
@@ -513,10 +513,10 @@ public sealed class MvuRuntimeTests
         _ => (state, [])
       },
       Subscriptions = state => state.SubActive
-          ? [new TestSubWithData(new SubscriptionKey { Value = "ticker" }, state.Count)]
+          ? [new TestSubWithData(SubscriptionKey.From("ticker"), state.Count)]
           : [],
-      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
-      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString())
+      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString()),
+      Validate = ValidationResult<TestState, TestMsg>.AlwaysValid
     };
 
     Func<Action, bool> dispatcher = action => { action(); return true; };
@@ -524,7 +524,7 @@ public sealed class MvuRuntimeTests
     using var runtime = MvuRuntimeBuilder
         .Create(programWithData)
         .WithCommandExecutor(
-            (TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct) => ValueTask.CompletedTask)
+            (TestCmd cmd, Dispatch<TestMsg> dispatch, CancellationToken ct) => ValueTask.FromResult(CommandResult<TestMsg>.Ok))
         .WithSubscriptionStarter(
             (TestSubWithData sub, Dispatch<TestMsg> dispatch) =>
             {
@@ -535,7 +535,7 @@ public sealed class MvuRuntimeTests
               }
 
               list.Add(sub.Interval);
-              return new TrackingDisposable();
+              return new TrackingAsyncDisposable();
             })
         .WithDispatcher(dispatcher)
         .Start();
@@ -552,7 +552,7 @@ public sealed class MvuRuntimeTests
   }
 
   [Fact]
-  public void OnCommandError_throwing_escalates_to_OnRuntimeError_with_ErrorHandlerFailed()
+  public void CommandExecutor_unexpected_throw_routes_via_OnRuntimeError_as_CommandExecutorFailed()
   {
     List<PambaError> runtimeErrors = [];
 
@@ -565,22 +565,22 @@ public sealed class MvuRuntimeTests
         _ => (state, [])
       },
       Subscriptions = _ => [],
-      OnCommandError = (_, _) => throw new InvalidOperationException("Handler bug"),
       OnRuntimeError = err =>
       {
         runtimeErrors.Add(err);
         return new TestMsg.RuntimeErrored(err.ToString());
-      }
+      },
+      Validate = ValidationResult<TestState, TestMsg>.AlwaysValid
     };
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime = StartRuntime(
         program,
-        (_, _, _) => ValueTask.FromException(new InvalidOperationException("Command failed")),
+        (_, _, _) => ValueTask.FromException<CommandResult<TestMsg>>(new InvalidOperationException("Executor bug")),
         NoOpStarter);
 
-    // OnCommandError threw, so ErrorHandlerFailed should have been routed via OnRuntimeError
+    // Unexpected throw from executor routed via OnRuntimeError as CommandExecutorFailed
     Assert.Single(runtimeErrors);
-    Assert.IsType<PambaError.ErrorHandlerFailed>(runtimeErrors[0]);
+    Assert.IsType<PambaError.CommandExecutorFailed>(runtimeErrors[0]);
     Assert.Equal(-1, runtime.State.Count);
   }
 
@@ -595,13 +595,13 @@ public sealed class MvuRuntimeTests
         _ => (state with { SubActive = false }, [])
       },
       Subscriptions = state => state.SubActive
-          ? [new TestSub(new SubscriptionKey { Value = "ticker" })]
+          ? [new TestSub(SubscriptionKey.From("ticker"))]
           : [],
-      OnCommandError = (_, _) => throw new InvalidOperationException("Handler bug"),
-      OnRuntimeError = _ => throw new InvalidOperationException("Runtime handler bug")
+      OnRuntimeError = _ => throw new InvalidOperationException("Runtime handler bug"),
+      Validate = ValidationResult<TestState, TestMsg>.AlwaysValid
     };
 
-    IDisposable ThrowingStarter(TestSub sub, Dispatch<TestMsg> dispatch) =>
+    IAsyncDisposable ThrowingStarter(TestSub sub, Dispatch<TestMsg> dispatch) =>
         throw new InvalidOperationException("Starter failed");
 
     // Suppress trace listeners so Trace.TraceError does not surface in the test host
@@ -650,12 +650,12 @@ public sealed class MvuRuntimeTests
         _ => (state, [])
       },
       Subscriptions = _ => [],
-      OnCommandError = (_, ex) => new TestMsg.CommandErrored(ex.Message),
       OnRuntimeError = err =>
       {
         runtimeErrors.Add(err);
         return new TestMsg.RuntimeErrored(err.ToString());
-      }
+      },
+      Validate = ValidationResult<TestState, TestMsg>.AlwaysValid
     };
 
     using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime = StartRuntime(
@@ -670,6 +670,69 @@ public sealed class MvuRuntimeTests
     Assert.Equal(1, runtime.State.Count);
     Assert.Single(runtimeErrors);
     Assert.IsType<PambaError.ProjectionFailed>(runtimeErrors[0]);
+  }
+
+  [Fact]
+  public void DispatchAll_processes_all_messages_and_produces_single_projection()
+  {
+    List<(TestState Old, TestState New)> projections = [];
+
+    using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime = StartRuntime(
+        CreateProgram(),
+        NoOpExecutor,
+        NoOpStarter,
+        onStateChanged: (old, @new) => projections.Add((old, @new)));
+
+    runtime.DispatchAll(new TestMsg.Increment(), new TestMsg.Increment(), new TestMsg.Increment());
+
+    // State flows through all three messages
+    Assert.Equal(3, runtime.State.Count);
+    // Projection fires exactly once for the whole batch, not once per message
+    Assert.Single(projections);
+    Assert.Equal(0, projections[0].Old.Count);
+    Assert.Equal(3, projections[0].New.Count);
+  }
+
+  [Fact]
+  public void DispatchAll_with_validation_rejection_dispatches_corrective_messages()
+  {
+    // If a message in the batch produces an invalid state, a corrective message is
+    // dispatched after the batch completes (not inside the batch loop).
+    MvuProgram<TestState, TestMsg, TestCmd, TestSub> program = new()
+    {
+      Init = () => (new TestState(0, false), []),
+      Update = (msg, state) => msg switch
+      {
+        TestMsg.SetValue v => (new TestState(v.Value, state.SubActive), []),
+        TestMsg.ValidationRejected => (new TestState(99, state.SubActive), []),
+        _ => (state, [])
+      },
+      Subscriptions = _ => [],
+      OnRuntimeError = err => new TestMsg.RuntimeErrored(err.ToString()),
+      Validate = state => state.Count < 0
+          ? new ValidationResult<TestState, TestMsg>.Invalid(new TestMsg.ValidationRejected())
+          : new ValidationResult<TestState, TestMsg>.Valid(state)
+    };
+
+    using var runtime = StartRuntime(program, NoOpExecutor, NoOpStarter);
+
+    // Batch: SetValue(1), SetValue(-1) [rejected], SetValue(2)
+    // After batch: corrective ValidationRejected dispatched → Count=99
+    runtime.DispatchAll(new TestMsg.SetValue(1), new TestMsg.SetValue(-1), new TestMsg.SetValue(2));
+
+    // SetValue(2) is the last accepted state from the batch; then corrective sets Count=99
+    Assert.Equal(99, runtime.State.Count);
+  }
+
+  [Fact]
+  public void DispatchAll_empty_span_is_noop()
+  {
+    using MvuRuntime<TestState, TestMsg, TestCmd, TestSub> runtime =
+        StartRuntime(CreateProgram(), NoOpExecutor, NoOpStarter);
+
+    runtime.DispatchAll(); // empty params is empty span
+
+    Assert.Equal(0, runtime.State.Count);
   }
 
   private sealed record TestSubWithData(SubscriptionKey Key, int Interval) : ISubscription<TestMsg>;

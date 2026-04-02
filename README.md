@@ -122,7 +122,6 @@ public static readonly MvuProgram<AppState, Msg, Cmd, Sub> Program = new()
     _ => (state, [])
   },
   Subscriptions = _ => [],
-  OnCommandError = (cmd, ex) => new Msg.SaveFailed(ex.Message),
   OnRuntimeError = err => new Msg.SaveFailed(err.ToString()),
   Validate = state => state.Count >= 0
       ? new ValidationResult<AppState, Msg>.Valid(state)
@@ -198,10 +197,11 @@ my-app/
 
 - **FIFO message ordering.** Messages are never processed concurrently.
   Every transition sees the result of all prior transitions.
-- **Command error routing.** Exceptions from command executors are caught and routed back
-  as typed messages via `OnCommandError`. If `OnCommandError` itself throws, the failure
-  is escalated via `OnRuntimeError` with `ErrorHandlerFailed`.
-  `OperationCanceledException` during disposal is silently absorbed.
+- **Command error routing.** Command executors return `CommandResult<TMsg>`:
+  `Ok` is silent success; `Error(msg)` dispatches a typed error message into the
+  Update loop. Unexpected throws are caught and routed via `OnRuntimeError` as
+  `PambaError.CommandExecutorFailed`. `OperationCanceledException` during disposal
+  is silently absorbed.
 - **Projection safety.** If the `onStateChanged` projection callback throws, the exception
   is caught and routed via `OnRuntimeError` with `ProjectionFailed`. The state transition
   itself completes — only the UI projection failed.
@@ -211,14 +211,14 @@ my-app/
 - **Subscription lifecycle correctness.** Started exactly once per unique key,
   restarted when subscription data changes (same key, different parameters),
   cancelled exactly once when removed, all cancelled on dispose.
-- **Validation on every transition.** When `Validate` is provided,
-  it runs in all build configurations - not only during testing.
+- **Validation on every transition.** `Validate` runs after every state transition
+  in all build configurations - not only during testing.
 - **State-unchanged optimisation.** When `oldState.Equals(newState)`, subscription diffing
   and projection callbacks are skipped. Commands are still executed.
 - **Thread safety.** `Dispatch` is safe to call from any thread.
   Processing occurs on the dispatcher thread.
-- **Disposal.** `MvuRuntime` implements `IDisposable`. Disposing cancels all active
-  subscriptions and causes subsequent `Dispatch` calls to no-op.
+- **Disposal.** `MvuRuntime` implements `IDisposable` and `IAsyncDisposable`. Disposing
+  cancels all active subscriptions and causes subsequent `Dispatch` calls to no-op.
 
 ## Licence
 

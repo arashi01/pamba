@@ -32,9 +32,8 @@ public sealed class MvuTestRunnerTests
       _ => (state, [])
     },
     Subscriptions = state => state.Count > 0
-        ? [new TestSub(new SubscriptionKey { Value = "tick-timer" })]
+        ? [new TestSub(SubscriptionKey.From("tick-timer"))]
         : [],
-    OnCommandError = (_, ex) => throw new InvalidOperationException("Unexpected command error", ex),
     OnRuntimeError = err => throw new InvalidOperationException($"Unexpected runtime error: {err}"),
     Validate = state => state.Count >= 0
         ? new ValidationResult<TestState, TestMsg>.Valid(state)

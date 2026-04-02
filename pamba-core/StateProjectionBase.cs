@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 
 namespace Pamba;
 
@@ -17,8 +18,11 @@ namespace Pamba;
 public abstract class StateProjectionBase<TState>
     where TState : IEquatable<TState>
 {
-  private readonly List<Action<TState, TState>> _diffSegments;
-  private readonly List<Action<TState>> _initSegments;
+  private readonly ImmutableArray<Action<TState, TState>>.Builder _diffBuilder;
+  private readonly ImmutableArray<Action<TState>>.Builder _initBuilder;
+  private ImmutableArray<Action<TState, TState>> _diffSegments;
+  private ImmutableArray<Action<TState>> _initSegments;
+  private bool _frozen;
 
   /// <summary>
   /// Initialises the projection base. Subclasses register segments via
@@ -26,8 +30,21 @@ public abstract class StateProjectionBase<TState>
   /// </summary>
   protected StateProjectionBase()
   {
-    _diffSegments = [];
-    _initSegments = [];
+    _diffBuilder = ImmutableArray.CreateBuilder<Action<TState, TState>>();
+    _initBuilder = ImmutableArray.CreateBuilder<Action<TState>>();
+    _diffSegments = ImmutableArray<Action<TState, TState>>.Empty;
+    _initSegments = ImmutableArray<Action<TState>>.Empty;
+  }
+
+  private void Freeze()
+  {
+    if (_frozen)
+    {
+      return;
+    }
+    _frozen = true;
+    _diffSegments = _diffBuilder.ToImmutable();
+    _initSegments = _initBuilder.ToImmutable();
   }
 
   /// <summary>
@@ -42,7 +59,7 @@ public abstract class StateProjectionBase<TState>
       Action<TSegment> project)
       where TSegment : IEquatable<TSegment>
   {
-    _diffSegments.Add((oldState, newState) =>
+    _diffBuilder.Add((oldState, newState) =>
     {
       TSegment oldSegment = selector(oldState);
       TSegment newSegment = selector(newState);
@@ -53,7 +70,7 @@ public abstract class StateProjectionBase<TState>
       }
     });
 
-    _initSegments.Add(state => project(selector(state)));
+    _initBuilder.Add(state => project(selector(state)));
   }
 
   /// <summary>
@@ -75,7 +92,7 @@ public abstract class StateProjectionBase<TState>
       Action<TSegment, TSegment> projectTransition)
       where TSegment : IEquatable<TSegment>
   {
-    _diffSegments.Add((oldState, newState) =>
+    _diffBuilder.Add((oldState, newState) =>
     {
       TSegment oldSegment = selector(oldState);
       TSegment newSegment = selector(newState);
@@ -86,7 +103,7 @@ public abstract class StateProjectionBase<TState>
       }
     });
 
-    _initSegments.Add(state => projectInitial(selector(state)));
+    _initBuilder.Add(state => projectInitial(selector(state)));
   }
 
   /// <summary>
@@ -102,6 +119,8 @@ public abstract class StateProjectionBase<TState>
       return;
     }
 
+    Freeze();
+
     foreach (Action<TState, TState> segment in _diffSegments)
     {
       segment(oldState, newState);
@@ -116,6 +135,8 @@ public abstract class StateProjectionBase<TState>
   /// <param name="initialState">The initial state to project.</param>
   public void ProjectInitial(TState initialState)
   {
+    Freeze();
+
     foreach (Action<TState> segment in _initSegments)
     {
       segment(initialState);
