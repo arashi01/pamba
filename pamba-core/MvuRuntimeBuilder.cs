@@ -174,8 +174,8 @@ public interface IRuntimeReady<TState, TMsg, TCmd, TSub>
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
   /// <summary>
-  /// Set the maximum number of transition records retained in debug message history.
-  /// Default is 1000. Only has effect in debug builds.
+  /// Enable transition history with the specified ring buffer size.
+  /// Disabled by default (no allocation, no recording overhead).
   /// </summary>
   public IRuntimeReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
 

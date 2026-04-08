@@ -6,11 +6,11 @@ using Xunit;
 
 namespace Pamba.WinUI.Tests;
 
-public sealed class StateProjectionBaseTests
+public sealed class ProjectionTests
 {
   private sealed record TestState(int Count, string Label) : System.IEquatable<TestState>;
 
-  private sealed class TestProjection : StateProjectionBase<TestState>
+  private sealed class TestProjection : Projection<TestState>
   {
     public List<int> CountProjections { get; } = [];
     public List<string> LabelProjections { get; } = [];
@@ -22,7 +22,7 @@ public sealed class StateProjectionBaseTests
     }
   }
 
-  private sealed class TransitionAwareProjection : StateProjectionBase<TestState>
+  private sealed class TransitionAwareProjection : Projection<TestState>
   {
     public List<int> InitProjections { get; } = [];
     public List<(int Old, int New)> TransitionProjections { get; } = [];

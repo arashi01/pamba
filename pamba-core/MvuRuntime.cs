@@ -32,11 +32,8 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable, IAsyncDi
   private readonly CancellationTokenSource _cts;
   private readonly SubscriptionManager<TSub, TMsg> _subscriptionManager;
 
-#if DEBUG
-  private const int _defaultMaxHistorySize = 1000;
   private readonly int _maxHistorySize;
-  private readonly Queue<TransitionSnapshot<TState, TMsg, TCmd, TSub>> _messageHistory;
-#endif
+  private readonly Queue<TransitionSnapshot<TState, TMsg, TCmd, TSub>>? _messageHistory;
 
   private TState _state;
   private int _disposed; // 0 = alive, 1 = disposed (Interlocked for thread-safe check-and-set)
@@ -59,11 +56,11 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable, IAsyncDi
     // Wrap the starter so that exceptions are routed via OnRuntimeError rather than propagating
     _subscriptionManager = new SubscriptionManager<TSub, TMsg>(SafeStarter, SafeDispatchRuntimeError);
 
-#if DEBUG
-    // 0 means not configured (builder default); positive values are pre-validated by builder
-    _maxHistorySize = maxHistorySize > 0 ? maxHistorySize : _defaultMaxHistorySize;
-    _messageHistory = new Queue<TransitionSnapshot<TState, TMsg, TCmd, TSub>>(_maxHistorySize);
-#endif
+    // 0 = disabled (no allocation). Positive = ring buffer of that size.
+    _maxHistorySize = maxHistorySize;
+    _messageHistory = maxHistorySize > 0
+        ? new Queue<TransitionSnapshot<TState, TMsg, TCmd, TSub>>(maxHistorySize)
+        : null;
 
     try
     {
@@ -120,7 +117,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable, IAsyncDi
       }
       catch (Exception ex)
       {
-        SafeDispatchRuntimeError(new PambaError.SubscriptionStartFailed(sub.Key, ex.GetType().Name, ex.Message));
+        SafeDispatchRuntimeError(new PambaError.SubscriptionStartFailed(sub.Key, ex));
         return NoopAsyncDisposable._instance;
       }
 #pragma warning restore CA1031
@@ -134,15 +131,11 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable, IAsyncDi
   public TState State => _state;
 
   /// <summary>
-  /// Message history (debug builds only). Null in release.
-  /// Bounded to a configurable maximum size (default 1000).
+  /// Transition history. Bounded ring buffer configured via <c>WithMaxHistorySize</c>.
+  /// Empty when history is disabled (the default). Never null.
   /// </summary>
-  public IReadOnlyCollection<TransitionSnapshot<TState, TMsg, TCmd, TSub>>? MessageHistory =>
-#if DEBUG
-      _messageHistory;
-#else
-      null;
-#endif
+  public IReadOnlyCollection<TransitionSnapshot<TState, TMsg, TCmd, TSub>> MessageHistory =>
+      _messageHistory ?? (IReadOnlyCollection<TransitionSnapshot<TState, TMsg, TCmd, TSub>>)Array.Empty<TransitionSnapshot<TState, TMsg, TCmd, TSub>>();
 
   private bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
@@ -253,15 +246,16 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable, IAsyncDi
       SafeInvokeProjection(oldState, newState);
     }
 
-#if DEBUG
-    if (_messageHistory.Count >= _maxHistorySize)
+    if (_messageHistory is not null)
     {
-      _messageHistory.Dequeue();
-    }
+      if (_messageHistory.Count >= _maxHistorySize)
+      {
+        _messageHistory.Dequeue();
+      }
 
-    _messageHistory.Enqueue(new TransitionSnapshot<TState, TMsg, TCmd, TSub>(
-        message, oldState, newState, cmds, newSubs));
-#endif
+      _messageHistory.Enqueue(new TransitionSnapshot<TState, TMsg, TCmd, TSub>(
+          message, oldState, newState, cmds, newSubs));
+    }
 
     foreach (TCmd cmd in cmds)
     {
@@ -307,17 +301,18 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable, IAsyncDi
 
       _state = newState;
 
-#if DEBUG
-      if (_messageHistory.Count >= _maxHistorySize)
+      if (_messageHistory is not null)
       {
-        _messageHistory.Dequeue();
-      }
+        if (_messageHistory.Count >= _maxHistorySize)
+        {
+          _messageHistory.Dequeue();
+        }
 
-      // Subscriptions computed per-step for accurate history; diffing deferred to end of batch.
-      ImmutableArray<TSub> debugSubs = _program.Subscriptions(newState);
-      _messageHistory.Enqueue(new TransitionSnapshot<TState, TMsg, TCmd, TSub>(
-          msg, oldState, newState, hasCorrective ? ImmutableArray<TCmd>.Empty : cmds, debugSubs));
-#endif
+        // Subscriptions computed per-step for accurate history; diffing deferred to end of batch.
+        ImmutableArray<TSub> historySubs = _program.Subscriptions(newState);
+        _messageHistory.Enqueue(new TransitionSnapshot<TState, TMsg, TCmd, TSub>(
+            msg, oldState, newState, hasCorrective ? ImmutableArray<TCmd>.Empty : cmds, historySubs));
+      }
 
       if (hasCorrective)
       {
@@ -370,7 +365,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable, IAsyncDi
       if (!IsDisposed)
       {
         SafeDispatchRuntimeError(
-            new PambaError.CommandExecutorFailed(cmd.GetType().Name, ex.GetType().Name, ex.Message));
+            new PambaError.CommandExecutorFailed(cmd.GetType().Name, ex));
       }
     }
   }
@@ -390,7 +385,7 @@ public sealed class MvuRuntime<TState, TMsg, TCmd, TSub> : IDisposable, IAsyncDi
     }
     catch (Exception ex)
     {
-      SafeDispatchRuntimeError(new PambaError.ProjectionFailed(ex.GetType().Name, ex.Message));
+      SafeDispatchRuntimeError(new PambaError.ProjectionFailed(ex));
     }
   }
 #pragma warning restore CA1031

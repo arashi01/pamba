@@ -10,7 +10,7 @@ namespace Pamba.WinUI;
 /// Creates an <see cref="MvuRuntime{TState, TMsg, TCmd, TSub}"/> wired to
 /// WinUI's <see cref="DispatcherQueue"/> for FIFO message ordering on the UI thread.
 /// </summary>
-public static class WinUIMvuRuntime
+public static class WinUIRuntime
 {
   /// <summary>
   /// Begin constructing a WinUI-backed MVU runtime.
@@ -93,7 +93,7 @@ public static class WinUIMvuRuntime
     }
 
     public IWinUIReady<TState, TMsg, TCmd, TSub>
-        WithProjection(StateProjectionBase<TState> projection)
+        WithProjection(Projection<TState> projection)
     {
       ArgumentNullException.ThrowIfNull(projection);
       _onInit = projection.ProjectInitial;
@@ -195,11 +195,11 @@ public interface IWinUIConfigurable<TState, TMsg, TCmd, TSub>
           Action<TState> onInit,
           Action<TState, TState> onStateChanged);
 
-  /// <summary>Provide a <see cref="StateProjectionBase{TState}"/> for segment-based projection.</summary>
+  /// <summary>Provide a <see cref="Projection{TState}"/> for segment-based projection.</summary>
   public IWinUIReady<TState, TMsg, TCmd, TSub>
-      WithProjection(StateProjectionBase<TState> projection);
+      WithProjection(Projection<TState> projection);
 
-  /// <summary>Set the maximum debug history size. Default is 1000. Only has effect in debug builds.</summary>
+  /// <summary>Enable transition history with the specified ring buffer size. Disabled by default.</summary>
   public IWinUIConfigurable<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
 
   /// <summary>Start without projection.</summary>
@@ -213,7 +213,7 @@ public interface IWinUIReady<TState, TMsg, TCmd, TSub>
     where TCmd : notnull
     where TSub : IEquatable<TSub>, ISubscription<TMsg>
 {
-  /// <summary>Set the maximum debug history size. Default is 1000. Only has effect in debug builds.</summary>
+  /// <summary>Enable transition history with the specified ring buffer size. Disabled by default.</summary>
   public IWinUIReady<TState, TMsg, TCmd, TSub> WithMaxHistorySize(int maxSize);
 
   /// <summary>
